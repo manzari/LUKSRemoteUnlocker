@@ -3,7 +3,6 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:args/args.dart';
-import 'package:unlock_core/engine.dart';
 import 'package:unlock_core/unlock_core.dart';
 
 import 'config.dart';
