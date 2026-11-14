@@ -1,20 +1,38 @@
 # LUKS Remote Unlocker — Summary & Implementation Plan
 
-Nov 14, 2026 · @Mister
+Nov 14, 2026 · @Mister · reviewed and finalized by Fable (rev 2)
 
 ## Summary
 
-Build one app for Android, iOS and desktop that unlocks LUKS-encrypted Linux servers waiting at the Dropbear pre-boot prompt, one tap per server or all at once.
+Build one app for Android, iOS and Linux desktop (plus a CLI) that unlocks LUKS-encrypted Linux servers waiting at the Dropbear pre-boot prompt, one tap per server or all at once.
 
-For each server the app waits until the pre-boot address answers, logs in over SSH with the key assigned to that server, types the disk passphrase, and reads the reply. It counts the unlock as done only when the server's post-boot address answers too.
+For each server the app waits until the pre-boot SSH port answers, checks the server's pinned host key, logs in with the SSH key assigned to that server, hands over the disk passphrase, and reads the result from the unlock command's exit code. It counts the unlock as done only when the booted system answers at the post-boot address with a different SSH host key than the pre-boot one.
 
-The user manages servers, SSH keys and passphrases in the app and decides which key goes with which server. Keys and passphrases sit in a vault that opens with a fingerprint or face, backed by the phone's secure hardware (Android Keystore, iPhone Secure Enclave).
+The user manages servers, SSH keys and passphrases in the app and decides which key goes with which server. Keys and passphrases are encrypted with a vault key that opens with a fingerprint or face, backed by the phone's secure hardware (Android Keystore, iPhone Secure Enclave), or with a master password on Linux.
 
-This doc is the hand-off: Claude Code builds the app phase by phase from it, and the open questions at the end are for refining the design with Fable.
+This doc is the hand-off. All design questions are decided (see Decisions); Opus subagents build it phase by phase.
+
+**v1 scope:** Android, iOS, Linux desktop, CLI. Debian/Ubuntu `dropbear-initramfs` servers. Everything else is in "After v1".
+
+## What changed in this review
+
+Each item was checked against the current package sources and the Debian `cryptroot-unlock` script.
+
+| # | Change | Why |
+| --- | --- | --- |
+| 1 | Unlock without a terminal: passphrase on stdin, result from the exit code. Prompt-matching with a pseudo-terminal moves to after v1. | `cryptroot-unlock` has a non-interactive mode when stdin is not a TTY. It prints the disk name, reads the passphrase from stdin, exits 0 or 1. No regex guessing, no echo to scrub, and the exact error texts are known from the script. |
+| 2 | Post-boot check is an SSH host-key check, not a ping. Ping becomes an optional check type after v1. | The initramfs answers ping too, usually on the same IP, so a ping right after the unlock can pass while the server is still in pre-boot. The booted system has a different host key than Dropbear, which proves the boot. |
+| 3 | Pre-boot gate is a TCP connect to the SSH port only. `dart_ping` is dropped from v1. | Ping says nothing about Dropbear being ready, is often filtered, and the package parses localized `ping` output and needs a native Swift build on iOS. |
+| 4 | Vault is one random vault key that encrypts all secrets; the biometric store holds only that key. A second, password-wrapped copy of the key serves as recovery and as the Linux vault. | Storing each secret as its own biometric entry means one prompt per secret. One key gives one prompt per run, survives a changed fingerprint enrollment through the recovery password, and makes the Linux vault and the later encrypted backup the same code. |
+| 5 | Test bench runs real Dropbear with a script modeled on the real `cryptroot-unlock`, not OpenSSH. | Dropbear is what production runs; algorithm and channel behaviour differ from OpenSSH. |
+| 6 | Added final states `Already up` and `Unlocked, boot not confirmed`; never retry a rejected passphrase. | Tapping "unlock all" on a running server should be harmless. Debian allows 3 tries by default, then stops asking. |
+| 7 | Per-host "legacy algorithms" switch. | dartssh2 4.0 removed `ssh-rsa` (SHA-1) host-key signatures and CBC from its defaults; Dropbear before 2020.79 offers only those for RSA host keys. |
+| 8 | Phases reordered: keys and vault crypto are pure Dart and move into the core before any UI; iOS is its own last phase. | They can be built and tested in Docker in parallel; iOS needs a Mac. |
+| 9 | Added a phase 0 (toolchain in Docker, repo layout, pinned versions). | All builds and tests run in containers; agents need one entry point. |
 
 ## Prior art
 
-No existing tool does the whole job: none checks a second address after the unlock, none keeps keys in a fingerprint-protected vault, and none runs on a phone.
+No existing tool does the whole job: none confirms the boot after the unlock, none keeps keys in a fingerprint-protected vault, and none runs on a phone.
 
 | Tool | What it does | What it lacks for us |
 | --- | --- | --- |
@@ -24,194 +42,294 @@ No existing tool does the whole job: none checks a second address after the unlo
 | [android-luks](https://github.com/full-disclosure/android-luks) | Phone unlocks a PC with biometrics | USB accessory mode, not network |
 | [tanga](https://github.com/gernotfeichter/tanga) | Tang server on the phone (network-bound encryption) | Different model: automatic unlock on the same Wi-Fi, no SSH |
 
-Worth borrowing: host-key pinning from cryptsetup-ssh-unlocker, and the per-host state machine with fallback addresses from dropbear-auto-unlock.
+Borrowed: host-key pinning from cryptsetup-ssh-unlocker, and the per-host state machine with fallback addresses from dropbear-auto-unlock.
 
 ## Requirements
 
-The must-haves are host and key management, a biometric vault, and an unlock run that ends with a post-boot ping.
-
 **Hosts**
 
-- Name, pre-boot address (IP or hostname) and port; Dropbear often listens on 2222, not 22.
-- One or more fallback pre-boot addresses (LAN IP, VPN IP), tried in turn.
+- Name, pre-boot addresses (IP or hostname, each with a port; Dropbear often listens on 2222), tried in order.
 - Login user (default `root`).
 - Assigned SSH key, picked from the key list.
-- Assigned passphrase, picked from the vault.
-- Post-boot check address (may differ from the pre-boot one) and a timeout.
-- Pinned host-key fingerprint of the pre-boot SSH server, stored on first connect after the user confirms it.
-- Unlock profile (see below), groups or tags for "unlock all in group".
+- Assigned passphrase, picked from the secrets list; optional per-disk overrides (disk name → secret).
+- Post-boot address and port (default: first pre-boot address, port 22), check type, and a boot timeout.
+- Pinned pre-boot host key, stored after the user confirms it on first connect or pastes it in advance.
+- Unlock profile, group for "unlock all in group", "legacy algorithms" switch, enabled flag.
 
 **SSH keys**
 
-- Generate Ed25519 in the app; import existing OpenSSH private keys (Ed25519, RSA, ECDSA), with or without a key passphrase.
+- Generate Ed25519 in the app; import existing OpenSSH private keys (Ed25519, RSA, ECDSA), with or without a key passphrase. An imported key is decrypted once and stored in the vault.
 - Show, copy, share and QR-encode the public key in `authorized_keys` format.
 - One key can serve many hosts; each host has exactly one key.
 
 **Passphrases**
 
-- Stored per host, or as a named secret reused by several hosts.
-- Never shown in clear unless the user asks and re-authenticates.
+- Named secrets; one secret can serve several hosts.
+- Never shown in clear unless the user asks and re-authenticates. Never copied to the clipboard.
+- Stored and sent as UTF-8 bytes exactly as typed, with no trailing newline.
 
-**Unlock profiles** (prompt handling differs by initramfs)
+**Unlock profiles**
 
-- Each profile = command to run after login (empty when Dropbear forces one), a prompt pattern, a success pattern, a wrong-passphrase pattern.
-- Ship presets: Debian/Ubuntu `cryptroot-unlock`, dracut `systemd-tty-ask-password-agent`, dracut-crypt-ssh `unlock`, Arch mkinitcpio. User can copy and edit a preset.
+- A profile = driver + command. v1 has one driver, `stdin`, and one built-in profile, Debian/Ubuntu `cryptroot-unlock`. The user can copy it and change the command.
+- The second driver, `pty` (prompt-matching), and the Fedora, Arch and ZFS presets come after v1. The profile record already carries the fields for it.
 
 **Runs**
 
 - Unlock one host, a group, or all; hosts run in parallel, each with its own live log.
-- Cancel at any point; retry with backoff while waiting for the server.
-- Final state per host: Unlocked (post-boot ping answered), Wrong passphrase, Host key mismatch, Auth failed, Timed out, Cancelled.
+- Cancel at any point; poll with backoff while waiting for the server.
+- Final state per host: Unlocked, Already up, Unlocked but boot not confirmed, Wrong passphrase, Host key mismatch, Auth failed, Pre-boot timeout, Cancelled, Error.
 - Run history with timestamps; passphrases never appear in logs.
-- Optional later: a TCP or HTTP service check after the ping.
 
 **Non-functional**
 
-- Works offline; no cloud, no telemetry, no analytics.
-- Secrets never written to disk in clear, never in logs, crash reports or clipboard history.
-- Android keeps running with the screen off during a run (foreground service with a notification).
-- Config export without secrets; encrypted full backup as a later phase.
+- Works offline; no cloud, no telemetry, no analytics, no sync.
+- Secrets never written to disk in clear, never in logs, crash output or the clipboard. OS backups of the app data are switched off.
+- Android keeps running with the screen off during a run (foreground service with a notification). iOS runs with the app open and the screen kept awake.
+- Config export and import without secrets.
 
 ## Unlock flow
 
-Each host runs this sequence on its own, and the passphrase is sent only after the server's host key matches the pinned one.
+One state machine per host. The passphrase is sent only after the server's host key matches the pinned one.
 
-&#91;embedded content: per-host unlock flow · 6 steps, 4 failure exits, 2 retry loops\]
+| # | State | What happens | Exits |
+| --- | --- | --- | --- |
+| 1 | Checking if up | One post-boot check (see below), 3 s timeout. | Passes → **Already up** |
+| 2 | Waiting for pre-boot | TCP connect to each pre-boot address in order, 3 s timeout each. Repeat every 2 s, backing off to 5 s, until the wait timeout (default 10 min). | Timeout → **Pre-boot timeout** |
+| 3 | Verifying host key | SSH key exchange. Compare the server key with the pinned one. Not pinned yet: pause this host and ask the user to confirm the SHA-256 fingerprint (other hosts keep running). | Differs → **Host key mismatch**. Equals the known post-boot key → **Already up**. Declined → **Cancelled** |
+| 4 | Authenticating | Public-key login with the assigned key. | Rejected → **Auth failed** |
+| 5 | Unlocking disk *n* | Open an exec channel without a pseudo-terminal, run the profile command, read `Please unlock disk <name>` from stdout, write the passphrase for that disk to stdin, close stdin, wait for the exit code (30 s timeout). | See result table |
+| 6 | Waiting for boot | Post-boot check every 2 s until the boot timeout (default 5 min). | Passes → **Unlocked**. Timeout → **Unlocked, boot not confirmed** |
 
-Red boxes end the run for that host. The two loops on the left retry on their own: "Try again later" means the server isn't ready for the passphrase yet, and a second prompt means a second encrypted disk.
+**Step 5 results** (texts are from the Debian script; all go to stderr)
+
+| Output | Exit | Action |
+| --- | --- | --- |
+| `cryptsetup: <name> set up successfully` | 0 | Disk done. Run the command again for the next disk (at most 8 rounds). |
+| No `Please unlock disk` line | 0 | All disks are already unlocked → step 6. |
+| Connection refused or closed on a later round, after at least one success | — | Server is booting → step 6. |
+| `Try again later` or `Timeout reached while waiting for askpass` | 1 | Not ready. Retry after 2 s, for at most 60 s, then **Error**. Nothing was consumed, so this is safe. |
+| `cryptsetup failed, bad password or options?` | 1 | **Wrong passphrase**. Stop. Never retry on its own. |
+| `maximum number of tries exceeded` | 1 | **Wrong passphrase** (tries used up; the server needs a reboot or console). |
+| Connection lost after the passphrase was written, no result line | — | Go to step 6 with a short timeout (60 s); pass → **Unlocked**, else **Error**. |
+| Anything else | any | **Error**, with the sanitized output in the log. |
+
+When Dropbear forces the command (`-c cryptroot-unlock`), it ignores the command the client asks for, so the app always sends the profile command and needs no "empty command" case.
+
+**Post-boot check types**
+
+- `ssh-hostkey` (default): TCP connect to the post-boot address, run the SSH key exchange, read the server's host key, then disconnect without logging in. Pass when the key differs from the pinned pre-boot key. The first key seen is stored as the host's post-boot key (no confirmation needed, since nothing secret is ever sent there); from then on the check passes only on that key, and a different one is shown as a warning in the log. Seeing the pre-boot key means "still in initramfs, keep waiting".
+- `tcp`: the port accepts a connection. Only valid when the post-boot port differs from every pre-boot port; the host form enforces this.
+- `none`: skip step 1 and 6; final state is **Unlocked, boot not confirmed**.
+- After v1: `icmp`, `http`.
 
 ## Architecture and tech stack
 
-Recommended: Flutter (Dart), one codebase for Android, iOS, Linux, macOS and Windows, built around a pure-Dart core that also ships as a CLI.
+Flutter (Dart), one codebase, built around a pure-Dart core that also ships as a CLI.
 
-| Concern | Choice | Why / notes |
+| Concern | Choice | Notes (checked Nov 2026) |
 | --- | --- | --- |
-| App framework | Flutter | One UI for phone and desktop; the libraries below all exist for it |
-| SSH client | [dartssh2](https://pub.dev/packages/dartssh2) | Pure Dart; shells with a pseudo-terminal; public-key auth with Ed25519, RSA, ECDSA; host-key check callback |
-| Vault | [biometric\_vault](https://pub.dev/packages/biometric_vault) (alt: biometric\_storage) | Android Keystore (StrongBox, else TEE) behind BiometricPrompt Class 3; iOS/macOS Keychain. Linux and Windows fall back to storage without a biometric gate |
-| Ping | [dart\_ping](https://pub.dev/packages/dart_ping) 10.x | ICMP on all five platforms; iOS via a bundled Swift engine, the others via the system `ping` |
-| SSH port probe | `Socket.connect` with timeout | Gate before SSH: ping can answer before Dropbear listens |
-| Key generation | Ed25519 library + OpenSSH encoder | dartssh2 parses keys; check whether it can also generate, else add one and test the encoder against `ssh-keygen` |
-| Local database | drift (SQLite) | Non-secret data only: hosts, profiles, public keys, run history |
-| State | Riverpod | Per-host run state streams into the UI |
-| Android background | Foreground service with notification | A run survives screen-off and app switch |
-| iOS background | None | iOS stops long background work; the run happens with the app open and the screen kept awake |
+| App framework | Flutter ≥ 3.44, Dart ≥ 3.12 | Floor set by biometric\_vault. Pin the exact stable version in phase 0. |
+| SSH client | [dartssh2](https://pub.dev/packages/dartssh2) ^4.1.0 | Pure Dart, actively maintained (security hardening Aug–Sep 2026). `onVerifyHostKey(type, fingerprint)` gets `SHA256:<base64>` as UTF-8 bytes and may be async, which lets the UI confirm a new key while the connection waits. `execute(cmd)` without `pty` gives stdin, stdout, stderr and `exitCode`. `SSHAlgorithms` re-enables legacy algorithms per connection. |
+| Key generation | [pinenacl](https://pub.dev/packages/pinenacl) (already a dartssh2 dependency) + dartssh2 `OpenSSHEd25519KeyPair(...).toPem()` | dartssh2 parses and writes OpenSSH keys but does not generate them. |
+| Vault crypto | [cryptography](https://pub.dev/packages/cryptography) ^2.9.0 | XChaCha20-Poly1305 for records, Argon2id for the password slot. Pure Dart, runs in the core and the CLI. |
+| Biometric key store | [biometric\_vault](https://pub.dev/packages/biometric_vault) ^1.1.2 | Maintained rebuild of biometric\_storage (which has had no release since Feb 2024). Android Keystore (StrongBox, else TEE) behind BiometricPrompt Class 3; iOS Keychain with access control. Typed `StorageInvalidatedException` after an enrollment change. |
+| Reachability | `Socket.connect` with timeout | No ICMP in v1. |
+| Local database | drift (SQLite) + `sqlite3_flutter_libs` | Hosts, profiles, public keys, run history, and the encrypted vault records. |
+| State | Riverpod | Per-host run state streams into the UI. |
+| Android background | [flutter\_foreground\_task](https://pub.dev/packages/flutter_foreground_task) ^11 | Used only to keep the process, CPU and Wi-Fi awake. The engine keeps running in the main isolate, so secrets never cross an isolate boundary. Service type `dataSync`. |
+| iOS background | None; [wakelock\_plus](https://pub.dev/packages/wakelock_plus) keeps the screen on | iOS stops long background work. |
+| Public key sharing | `qr_flutter`, `share_plus` | Latest stable. |
 
-**Layers**
+**Repository layout** (Dart pub workspace)
 
-1. `unlock_core` (pure Dart, no Flutter): models, unlock state machine, prompt matcher, interfaces for SSH, reachability and secrets. Fully unit-testable.
-2. `unlock_cli`: thin command-line wrapper over the core, reading a YAML config, keys from files, passphrase from stdin. Used for integration tests and headless desktop use.
-3. Platform adapters: vault, ping, background service, each behind a core interface.
-4. Flutter UI: hosts, keys, secrets, profiles, runs, settings.
+```
+packages/unlock_core/   pure Dart: models, engine, drivers, keys, vault crypto, interfaces
+packages/unlock_cli/    CLI over the core
+app/                    Flutter app (android/, ios/, linux/)
+bench/                  Docker test target (Dropbear + fake unlock script)
+vm/                     QEMU Debian VM with real LUKS (phase 7)
+tool/                   Dockerfiles and scripts behind the Makefile
+docs/                   server-setup.md, security-checklist.md, device-checklist.md
+Makefile                make test | bench-up | bench-down | cli | apk | linux
+```
 
-Alternatives for Fable to weigh are in Open questions: Kotlin Multiplatform, or Tauri 2 with the Rust `russh` client.
+**Core interfaces** (in `unlock_core`; adapters implement them)
+
+```dart
+abstract interface class Reachability {
+  Future<bool> tcpOpen(String host, int port, Duration timeout);
+}
+abstract interface class SshConnector {
+  Future<SshConnection> connect(Endpoint e, {required HostKeyPolicy policy,
+      required bool legacyAlgorithms, required Duration timeout});
+  Future<HostKey> probeHostKey(Endpoint e, {required Duration timeout}); // kex only, no login
+}
+abstract interface class SshConnection {
+  Future<void> authenticate(String user, PrivateKeyBytes key);
+  Future<ExecSession> exec(String command); // no pty
+  Future<void> close();
+}
+abstract interface class ExecSession {
+  Stream<Uint8List> get stdout; Stream<Uint8List> get stderr;
+  void write(Uint8List data); Future<void> closeStdin(); Future<int?> get exitCode;
+}
+abstract interface class UnlockDriver { // v1: StdinDriver
+  Future<DriverResult> run(SshConnection c, UnlockProfile p, SecretResolver secrets, RunLog log);
+}
+abstract interface class VaultKeyStore { // biometric slot: Android/iOS adapter
+  Future<Uint8List?> read(); Future<void> write(Uint8List key); Future<void> delete();
+}
+abstract interface class HostKeyPrompt { Future<bool> confirm(HostRef h, HostKey k); }
+```
+
+The engine is `UnlockEngine.run(List<HostPlan>, RunSecrets) → Stream<HostEvent>` with a `cancel()`; it takes every dependency through these interfaces plus an injectable clock, so each transition is unit-testable with fakes.
+
+**Rejected alternatives**
+
+- Kotlin Multiplatform: no maintained pure-Kotlin SSH client that runs on iOS.
+- Tauri 2 + Rust `russh`: the SSH side is strong, but biometric key storage and an Android foreground service would both be custom native plugins.
+- Signing SSH logins inside the secure hardware: Android StrongBox has no Ed25519, and imported keys could not use it. The private key is vault-encrypted instead.
 
 ## Security model
 
-The passphrase is only as safe as the server it is typed into, so host-key pinning matters as much as the vault.
+The passphrase is only as safe as the server it is sent to, so host-key pinning matters as much as the vault.
 
 **Vault**
 
-- Private keys and passphrases are vault entries; everything else lives in the plain database.
-- Android: Keystore key (StrongBox when present) usable only after a strong (Class 3) biometric. iPhone: Keychain item with biometric access control, protected by the Secure Enclave. This is the phone's equivalent of a TPM.
-- One biometric prompt per run releases the entries that run needs. Secrets stay in memory only for the run, as byte arrays overwritten afterwards (Dart cannot guarantee wiping; note it, don't overclaim).
-- Setting: allow the device PIN as fallback, or biometric only.
-- Desktop (Linux, Windows): no biometric gate is available, so use a master password (Argon2id-derived key) or the OS keyring. macOS can use Touch ID through the Keychain.
+- One random 32-byte vault key. Every private key and passphrase is a record encrypted with XChaCha20-Poly1305 under it (random 24-byte nonce, record kind and id as associated data) and stored in the database. Nothing secret is stored outside these records.
+- The vault key itself is stored in "slots", like LUKS key slots:
+  - **Biometric slot** (Android, iOS): the vault key in a `biometric_vault` store. Reading it shows one biometric prompt.
+  - **Password slot** (all platforms): the vault key encrypted under an Argon2id key derived from a password. On Linux this is the master password and the only slot. On phones it is the recovery password: strongly recommended at setup, skippable with a clear warning.
+- One prompt per run releases the vault key; the run decrypts only the records its hosts need. Secrets are `Uint8List`, never `String`, and are overwritten when the run ends (Dart cannot guarantee wiping; don't overclaim in the UI).
+- A new fingerprint or face enrollment invalidates the biometric slot (platform default, kept on purpose). The app then asks for the recovery password and creates a new biometric slot. Without a recovery password the vault is lost and secrets must be re-entered; the setup screen says so.
+- Setting "allow device PIN as fallback", default off. Changing it rewrites the biometric slot with the other option, after an unlock.
+- Argon2id parameters: start at 19 MiB, 2 passes, 1 lane (OWASP minimum), run in a background isolate; raise memory if a mid-range phone stays under 1 s. Parameters are stored with the slot.
 
 **Host-key pinning**
 
-- First connect shows the pre-boot server's SHA-256 fingerprint; the user confirms it or pastes the expected one.
-- A changed key stops the run before any passphrase is sent. No "accept anyway" in the run screen; re-pinning is a separate, re-authenticated action.
-- The pre-boot (Dropbear) host key differs from the running system's key; the app only ever SSHes to the pre-boot one.
+- First connect shows the pre-boot server's key type and SHA-256 fingerprint; the user confirms it, or pastes the expected one into the host form beforehand. The setup help shows how to print it on the server.
+- Once pinned, the client offers only that key type, so a server with several host keys cannot trigger a false mismatch.
+- A changed key stops that host before login. There is no "accept anyway" in the run screen; re-pinning is a separate, re-authenticated action in the host form.
+- The app logs in only to the pre-boot server. The post-boot check reads a host key and disconnects.
 
 **App hygiene**
 
-- Block screenshots and recent-apps previews on secret screens (Android `FLAG_SECURE`, iOS blur on background).
-- Copied public keys only; never copy a passphrase. Clear any clipboard use after 30 seconds.
-- Logs record states and server output with the passphrase and any echo of it removed.
+- Android: `FLAG_SECURE` on the whole app, `allowBackup="false"` and data-extraction rules that exclude everything. iOS: blur on background, database excluded from iCloud backup.
+- Only public keys can be copied or shared.
+- Logs record states and server output. Stdin is never logged; any occurrence of a run secret's bytes in output is replaced before it reaches the log, the UI or the database.
+- `SSHClient` debug and trace printers stay unset in release builds.
 
-**Server-side advice the app shows in its setup help**
+**Server-side advice shown in the setup help** (`docs/server-setup.md`)
 
-- Dropbear options `-s -j -k -c cryptroot-unlock`: no password login, no port forwarding, only the unlock command.
-- A dedicated LUKS key slot for remote unlock, so a lost phone means removing one slot, not changing the main passphrase.
-- A dedicated SSH key per phone, so one device can be revoked from `authorized_keys`.
+- `/etc/dropbear/initramfs/dropbear.conf`: `DROPBEAR_OPTIONS="-p 2222 -s -j -k -I 180 -c cryptroot-unlock"`, then `update-initramfs -u`.
+- Print the pre-boot fingerprint: `dropbearkey -y -f /etc/dropbear/initramfs/dropbear_ed25519_host_key`.
+- A dedicated LUKS key slot for remote unlock, so a lost phone means removing one slot.
+- A dedicated SSH key per device, so one device can be revoked from `authorized_keys`.
 
 ## Data model
 
-Five records; only two fields across them hold secrets, and those are vault references, never values.
+| Record | Fields |
+| --- | --- |
+| Host | id, name, group, pre-boot endpoints (ordered list of host + port), user, key id, secret id, disk overrides (disk name → secret id), profile id, post-boot host, post-boot port, post-boot check (`ssh-hostkey` / `tcp` / `none`), wait timeout, boot timeout, pinned pre-boot key (type + SHA-256), seen post-boot key (type + SHA-256), legacy algorithms, enabled |
+| SSH key | id, label, type, public key (OpenSSH line), fingerprint, vault record id, created |
+| Secret | id, label, vault record id |
+| Unlock profile | id, name, built-in (yes/no), driver (`stdin` / `pty`), command; for `pty` only: prompt, success and failure regex |
+| Vault record | id, kind (`ssh-key` / `passphrase`), nonce, ciphertext |
+| Vault slot | kind (`biometric` / `password`), for password: salt, Argon2id parameters, nonce, wrapped key |
+| Run | id, started, per host: final state, events (time, state, sanitized message) |
 
-| Record | Fields | Stored in |
-| --- | --- | --- |
-| Host | id, name, group, pre-boot addresses (list of host + port, in try order), user, key id, secret id, profile id, post-boot address, wait timeout, verify timeout, pinned host-key SHA-256, enabled | Database |
-| SSH key | id, label, type, public key (OpenSSH line), fingerprint, vault ref to private key, created | Database + vault |
-| Secret | id, label, vault ref to passphrase, hosts using it (derived) | Database + vault |
-| Unlock profile | id, name, command to run (empty if Dropbear forces one), prompt regex, success regex, failure regex, repeat for several disks (yes/no) | Database |
-| Run | id, started, per host: final state, events (time, state, sanitized message) | Database |
+**Built-in profile: Debian/Ubuntu `cryptroot-unlock`** (from the [Debian script](https://salsa.debian.org/cryptsetup-team/cryptsetup/-/blob/debian/latest/debian/initramfs/cryptroot-unlock))
 
-**Built-in profile: Debian/Ubuntu `cryptroot-unlock`** (from the [Debian script](https://sources.debian.org/src/cryptsetup/2:2.8.4-1/debian/initramfs/cryptroot-unlock) and a [real session](https://www.dwarmstrong.org/remote-unlock-dropbear))
-
-- Command: `cryptroot-unlock`, or empty when Dropbear runs with `-c cryptroot-unlock`.
-- Prompt: ` Please unlock disk (\S+):  ` — repeats once per encrypted disk.
-- Success: `cryptsetup: (\S+) set up successfully`, then the server closes the connection.
-- Not ready yet: `Try again later` — treat as "retry in a few seconds", not failure.
-- Wrong passphrase: capture the exact text on the test bench before writing the regex.
-
-**Built-in profile: Fedora/RHEL dracut-sshd** ([Red Hat guide](https://developers.redhat.com/articles/2026/09/11/unlock-a-luks-root-over-ssh-on-fedora-and-red-hat-enterprise-linux))
-
-- Command: `systemd-tty-ask-password-agent`.
-- Prompt: `Please enter passphrase for disk (.+):`.
-- Success: the connection closes after the answer; confirm on the bench.
-
-Other presets (dracut-crypt-ssh `unlock`, Arch mkinitcpio) are added the same way once their transcripts are recorded.
+- Driver `stdin`, command `cryptroot-unlock`. Behaviour and texts as in the step 5 table.
 
 ## Implementation phases
 
-Seven phases; each ends with a check Claude Code can run itself before moving on. Build the engine and test bench before any UI.
+Each phase ends with a check the agent runs itself. Rules for every phase:
 
-1. **Test bench.** Docker Compose with a fake pre-boot target: OpenSSH on port 2222, key-only login, `ForceCommand` running a script that mimics `cryptroot-unlock` (prompt, read passphrase, print success or error, exit). On success it brings up a second container or IP alias that answers ping, standing in for the booted system.
-   - Done when: `ssh -p 2222` with the right key and passphrase prints the success line, and the post-boot address starts answering ping within 10 s.
-2. **Core engine + CLI.** State machine, prompt matcher, reachability (ping, then TCP probe), dartssh2 session with PTY, host-key pinning, timeouts, cancel. CLI reads YAML hosts, key files and the passphrase from stdin.
-   - Done when: the CLI unlocks the bench target; a wrong passphrase, a changed host key, an absent host and a cancel each end in their named state; no passphrase appears in any output.
-3. **App skeleton + data.** Flutter app, drift database, screens to add, edit and delete hosts, keys, secrets and profiles; assign a key and a secret to each host.
-   - Done when: widget tests cover the forms; data survives an app restart.
-4. **Keys.** Generate Ed25519, import OpenSSH private keys (with key passphrase), show, copy, share and QR-encode the public key.
-   - Done when: a generated key logs into the bench, and its public line matches what `ssh-keygen -y` derives from the same private key.
-5. **Vault.** Biometric vault on Android and iOS, master-password vault on Linux and Windows, Keychain on macOS. One prompt per run.
-   - Done when: on a real Android phone and iPhone, secrets cannot be read without the biometric, and a run asks once.
-6. **Runs.** Unlock one, a group or all; parallel per-host runs with live logs; Android foreground service and notification; iOS keeps the screen awake; run history.
-   - Done when: three bench targets unlock in parallel from the phone with the screen off (Android), and history shows each final state.
-7. **Real targets and hardening.** QEMU VMs with real LUKS and dropbear-initramfs (Debian) and dracut-sshd (Fedora); record transcripts and finish both profiles. Add screenshot blocking, clipboard clearing, config export.
-   - Done when: both VMs unlock from the phone and reach the post-boot ping; a security review checklist passes.
+- Run all builds, tests and tools in Docker through the Makefile; install nothing on the host.
+- Code comments only where needed, one short line.
+- No secret in any test output, fixture name or log; tests use obviously fake passphrases.
+- A phase is done when `make test` is green and its "Done when" holds. Report failures with output; do not weaken a check to pass it.
+
+Phases 1, 3 and 4 do not depend on each other and can run as parallel subagents after phase 0. Phase 2 needs 1. Phase 5 needs 2–4.
+
+**0. Scaffold.** Pub workspace and the layout above. `tool/Dockerfile.dart` (Dart SDK) and `tool/Dockerfile.flutter` (Flutter + Android SDK + Linux desktop build deps), versions pinned. Makefile targets. Strict analysis options. Empty packages that compile.
+- Done when: `make test` runs `dart analyze` and an empty test suite for all three packages in Docker and exits 0.
+
+**1. Test bench.** `bench/`: one container image with Dropbear (`dropbear -F -E -p 2222 -s -j -k -c /usr/local/bin/fake-cryptroot-unlock`), an `authorized_keys` from a fixture key, and OpenSSH `sshd` with its own host key as the "booted system". The fake script copies the real script's two modes, texts and exit codes, and is driven by environment variables: `PASSPHRASE`, `DISKS` (names, default one), `NOT_READY_SECONDS` (answers `Try again later` at first), `MAX_TRIES` (default 3), `BOOT_DELAY` (default 3 s). After the last disk unlocks it stops Dropbear and starts `sshd` on port 22 after the delay. Compose file with three such targets on fixed ports, plus a `reset` command.
+- Done when: a shell test using the stock `ssh` client proves: right passphrase piped on stdin → exit 0 and the success line; wrong → exit 1 and the failure line; third wrong → the tries line; two disks need two rounds; after success port 2222 closes and port 22 presents a different host key.
+
+**2. Core engine + CLI.** Models, `UnlockEngine`, `StdinDriver`, TCP reachability, the dartssh2 adapter (host-key policy, legacy switch, `probeHostKey`), log sanitizer, timeouts, cancel. CLI: `unlock --config hosts.yaml [--host name | --group g | --all] [--accept-new-host-key]`, keys from files, passphrase from stdin or a file descriptor; exit code 0 only if every host ended Unlocked or Already up.
+- First, two spikes against the bench, because the design depends on them: (a) closing the exec session's stdin makes the remote `cat` see end-of-file under Dropbear; (b) `probeHostKey` can read the key and abort cleanly by returning false from `onVerifyHostKey`. If (a) fails, send channel EOF through the lower-level channel API; report before going further.
+- Done when: unit tests cover every row of the flow and result tables with fakes; integration tests against the bench end in the right state for: success, two disks, per-disk secrets, not-ready-then-success, wrong passphrase (and no second attempt is made), changed host key, unpinned key refused without the flag, wrong SSH key, absent host, cancel while waiting, already up; a test greps all CLI output and logs for the passphrase and finds nothing.
+
+**3. Keys** (in `unlock_core`). Generate Ed25519; import OpenSSH private keys (Ed25519, RSA, ECDSA; with key passphrase); public line, SHA-256 fingerprint; export of the private key is not offered.
+- Done when: a generated key logs into the bench; its public line equals `ssh-keygen -y` output for the same key and its fingerprint equals `ssh-keygen -lf`; keys made by `ssh-keygen` for each type, with and without passphrase, import and log in.
+
+**4. Vault** (crypto in `unlock_core`). Vault key, records, password slot, slot add/remove/change-password, `VaultKeyStore` interface with an in-memory fake. CLI gains `vault` commands so the Linux path is testable headless.
+- Done when: unit tests cover round-trips, wrong password, tampered ciphertext, swapped records (associated data), re-wrapping after a password change, and recovery after the biometric slot is lost; the database file contains no plaintext secret (byte search in a test).
+
+**5. App skeleton + data.** Flutter app for Android and Linux (iOS folder generated and kept compiling in principle). Drift schema as in the data model. Screens: hosts, host form, keys (generate, import, show, copy, share, QR), secrets, profiles, settings, first-run vault setup (biometric where available, recovery or master password). Android: `FlutterFragmentActivity`, AppCompat theme, minSdk 24, `FLAG_SECURE`, backups off. Biometric adapter for `VaultKeyStore`; Linux uses the password slot.
+- Done when: widget tests cover the forms and their validation (including the `tcp` check port rule); data survives a restart in an integration test on Linux; `make apk` and `make linux` build.
+
+**6. Runs.** Run screen with one biometric or password prompt, parallel per-host cards with live logs, the host-key confirmation dialog, cancel, run history. Android foreground service with notification, wake and Wi-Fi lock, notification permission; started when a run starts, stopped when it ends. Config export and import without secrets.
+- Done when: the Linux app unlocks the three bench targets in parallel in an integration test and history shows each final state; the Android build passes the same flow on an emulator in Docker if KVM is available (`adb emu finger touch` for the biometric), otherwise this is handed to the device checklist.
+
+**7. Real target and Android device.** `vm/`: unattended Debian stable install in QEMU (preseed with encrypted root, `dropbear-initramfs`, the options from the setup help), ports forwarded to the host. Run the CLI and the app against it; record the real transcripts as test fixtures and correct the fake script if it differs. Write `docs/security-checklist.md` and `docs/device-checklist.md`.
+- Done when: the CLI unlocks the VM and ends in Unlocked; a wrong passphrase ends in Wrong passphrase with the real text; the VM also unlocks with a second LUKS disk. Then the user runs the device checklist on a real Android phone: secrets unreadable without biometric, one prompt per run, run survives screen-off, new fingerprint → recovery password flow, PIN fallback setting.
+
+**8. iOS.** Needs the user's Mac with Xcode and an iPhone. `Info.plist`: `NSFaceIDUsageDescription`, `NSLocalNetworkUsageDescription`; blur on background; backup exclusion; wakelock during runs; a 30 s background-task grace so an unlock in progress finishes if the app is left.
+- Done when: the user completes the device checklist on an iPhone against the bench or VM.
+
+## After v1
+
+In this order unless priorities change:
+
+1. **Armed watch.** One fingerprint, pick hosts and a time limit (default 2 h), secrets held in memory only; the engine loops per host: wait for pre-boot → unlock → wait for boot → wait for the pre-boot key to appear again. Android (foreground service) and CLI/desktop only. Ends on timeout, on cancel, or on any Wrong passphrase or Host key mismatch.
+2. **`pty` driver** with prompt, success and failure patterns, and presets for Fedora/RHEL dracut-sshd (`systemd-tty-ask-password-agent`), Arch mkinitcpio and ZFS, each finished against a real VM transcript.
+3. **More post-boot checks:** ICMP (`dart_ping` 10.x, which now bundles its iOS engine) and HTTP.
+4. **Encrypted full backup:** database export plus a password slot; restore creates a new biometric slot.
+5. **macOS and Windows** builds (macOS can use Touch ID through biometric\_vault; Windows uses the password slot).
 
 ## Testing
 
-Most behavior is tested without a phone: the core runs against fakes and the Docker bench in CI; only the vault and background behavior need real devices.
-
 | Level | What | Where it runs |
 | --- | --- | --- |
-| Unit | Prompt matcher against recorded transcripts (one disk, two disks, wrong passphrase, "Try again later"); every state-machine transition with fake SSH and reachability | CI |
-| Unit | Log sanitizer never emits the passphrase, even if the server echoes it | CI |
-| Integration | CLI against the Docker bench: success, wrong passphrase, host-key change, unreachable, timeout, cancel mid-wait | CI |
-| Widget | Host, key, secret and profile forms; key-to-host assignment | CI |
-| Device | Biometric vault, PIN fallback setting, one prompt per run, foreground service with screen off | Real Android phone and iPhone (biometrics are unreliable in the iOS simulator) |
-| End to end | Debian and Fedora QEMU VMs with real LUKS, unlocked from the phone, post-boot ping confirmed | Local, before each release |
+| Unit | Every state-machine transition and every row of the result table with fake SSH, reachability and clock | Docker, `make test` |
+| Unit | Sanitizer never emits a run secret; vault crypto cases from phase 4 | Docker |
+| Unit | Key generation and import against `ssh-keygen` | Docker |
+| Integration | CLI against the Dropbear bench: all cases listed in phase 2 | Docker Compose |
+| Widget / integration | Forms; Linux app against the bench | Docker (headless with Xvfb) |
+| Device | Biometric vault, recovery flow, PIN setting, one prompt per run, screen-off run | Real Android phone and iPhone, by the user, from `docs/device-checklist.md` |
+| End to end | Debian QEMU VM with real LUKS, one and two disks | Local, Docker with `/dev/kvm`, before each release |
 
-## Open questions for Fable
+## Decisions
 
-Each needs a decision before or during the phase named; the plan above assumes the first option.
+All former open questions, closed.
 
-- [ ] **Framework** (before phase 1): Flutter + dartssh2, Kotlin Multiplatform, or Tauri 2 + Rust `russh`? Weigh SSH library maturity, the biometric plugin on each, and iOS ICMP.
-- [ ] **Vault library** (phase 5): biometric\_vault, biometric\_storage or biometric\_security? Should a new fingerprint enrollment invalidate the vault (safer, but forces re-import)?
-- [ ] **Desktop vault** (phase 5): master password, OS keyring, or require the phone to approve desktop runs?
-- [ ] **Watch mode** (phase 6): keep waiting across reboots and unlock without a tap? It conflicts with a per-run biometric, because the secret must be readable unattended.
-- [ ] **Pre-boot gate** (phase 2): ping then TCP probe, or TCP probe only for networks that drop ICMP?
-- [ ] **Post-boot check** (phase 6): ping only, or optional TCP port / HTTP check per host?
-- [ ] **Several disks** (phase 2): same passphrase for every prompt, or one secret per disk name?
-- [ ] **iOS limits** (phase 6): is "keep the app open during a run" acceptable on iPhone?
-- [ ] **Multiple devices** (later): any sync of hosts between phone and desktop, or strictly per-device with export/import?
+| Question | Decision |
+| --- | --- |
+| Framework | Flutter + dartssh2. See Rejected alternatives. |
+| Vault library | biometric\_vault, holding only the vault key. Enrollment change invalidates the biometric slot; the recovery password restores access. |
+| Desktop vault | Master password (Argon2id). No OS keyring: it has no gate on Linux. No phone-approves-desktop: it would need a new transport. |
+| Watch mode | Not in v1. First item after v1, as "armed watch". |
+| Pre-boot gate | TCP connect to the SSH port only. |
+| Post-boot check | SSH host-key check by default; `tcp` or `none` per host; ICMP and HTTP after v1. |
+| Several disks | One secret per host by default, optional per-disk overrides. The disk name is read before the passphrase is sent. A rejected passphrase stops the host. |
+| iOS limits | Accepted: the app stays open and the screen awake during a run. |
+| Multiple devices | No sync. Config export/import without secrets in v1; encrypted full backup after v1. |
+| Platforms for v1 | Android, iOS, Linux desktop, CLI. |
+| Server types for v1 | Debian/Ubuntu dropbear-initramfs. |
+| CI | None for now; `make test` in Docker is the single entry point, so a CI wrapper can be added later unchanged. |
+
+## What needs the user
+
+- A Mac with Xcode, an Apple developer account and an iPhone for phase 8.
+- An Android phone with a fingerprint enrolled for the phase 7 device checklist.
+- `/dev/kvm` available to Docker on the build machine for the VM and emulator tests.
 
 ## Sources
 
-- [dartssh2](https://pub.dev/packages/dartssh2) · [biometric\_vault](https://pub.dev/packages/biometric_vault) · [dart\_ping](https://pub.dev/packages/dart_ping)
-- [Debian cryptroot-unlock source](https://sources.debian.org/src/cryptsetup/2:2.8.4-1/debian/initramfs/cryptroot-unlock) · [Dropbear unlock session](https://www.dwarmstrong.org/remote-unlock-dropbear) · [Red Hat: unlock a LUKS root over SSH](https://developers.redhat.com/articles/2026/09/11/unlock-a-luks-root-over-ssh-on-fedora-and-red-hat-enterprise-linux)
+- [dartssh2](https://pub.dev/packages/dartssh2) 4.1.0 source and changelog · [biometric\_vault](https://pub.dev/packages/biometric_vault) 1.1.2 README · [dart\_ping](https://pub.dev/packages/dart_ping) 10.0.1 README
+- [Debian cryptroot-unlock source](https://salsa.debian.org/cryptsetup-team/cryptsetup/-/blob/debian/latest/debian/initramfs/cryptroot-unlock) · [Dropbear unlock session](https://www.dwarmstrong.org/remote-unlock-dropbear) · [Red Hat: unlock a LUKS root over SSH](https://developers.redhat.com/articles/2026/09/11/unlock-a-luks-root-over-ssh-on-fedora-and-red-hat-enterprise-linux)
 - Prior art links are in the Prior art table.
