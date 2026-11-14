@@ -1,0 +1,11 @@
+# "Booted system": only has to complete a key exchange with its own host keys.
+Port 22
+HostKey /var/lib/bench/sshd/ssh_host_ed25519_key
+HostKey /var/lib/bench/sshd/ssh_host_ecdsa_key
+HostKey /var/lib/bench/sshd/ssh_host_rsa_key
+PidFile /run/bench/sshd.pid
+PermitRootLogin prohibit-password
+AuthorizedKeysFile none
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+UsePAM no

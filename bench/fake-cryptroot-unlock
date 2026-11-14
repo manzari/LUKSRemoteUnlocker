@@ -1,0 +1,118 @@
+#!/bin/busybox ash
+# Bench stand-in for Debian's debian/initramfs/cryptroot-unlock; state comes from bench-init.
+
+set -uef
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+
+TIMEOUT=10
+B=/run/bench
+S=$B/state
+UNLOCK_ALL=n
+
+now_ms() { date +%s%3N; }
+
+if [ ! -f "$B/config" ] || [ ! -f "$S/ready_at" ] || [ "$(now_ms)" -lt "$(cat "$S/ready_at")" ]; then
+	echo "Try again later" >&2
+	exit 1
+fi
+. "$B/config"
+unset -v IFS
+
+count_locked_devices() {
+	local d n=0
+	for d in $DISKS; do
+		[ -e "$S/unlocked/$d" ] || n=$(( n + 1 ))
+	done
+	printf '%d\n' "$n"
+}
+
+first_locked_device() {
+	local d
+	for d in $DISKS; do
+		[ -e "$S/unlocked/$d" ] || { echo "$d"; return 0; }
+	done
+}
+
+# askpass is gone after the last try, while cryptsetup works, and for 1 s after a failure
+askpass_waiting() {
+	[ ! -e "$S/gave_up" ] && [ ! -e "$S/busy" ] &&
+		[ "$(now_ms)" -ge "$(cat "$S/next_prompt" 2>/dev/null || echo 0)" ]
+}
+
+wait_for_prompt() {
+	local timer num_locked_devices=-1 n
+	while :; do
+		n=$(count_locked_devices)
+		if [ $n -eq 0 ]; then
+			exit 0
+		elif [ $num_locked_devices -lt 0 ] || [ $n -lt $num_locked_devices ]; then
+			timer=$(( 10 * TIMEOUT ))
+		fi
+		num_locked_devices=$n
+
+		if askpass_waiting; then
+			break
+		fi
+
+		sleep 0.1
+		timer=$(( timer - 1 ))
+		if [ $timer -le 0 ]; then
+			echo "Error: Timeout reached while waiting for askpass." >&2
+			exit 1
+		fi
+	done
+	CRYPTTAB_NAME=$(first_locked_device)
+	CRYPTTAB_TRIED=$(cat "$S/tries/$CRYPTTAB_NAME" 2>/dev/null || echo 0)
+}
+
+expected_passphrase() {
+	local p
+	EXPECTED=$PASSPHRASE
+	for p in $DISK_PASSPHRASES; do
+		[ "${p%%=*}" != "$CRYPTTAB_NAME" ] || EXPECTED=${p#*=}
+	done
+}
+
+wait_for_answer() {
+	local tried
+	touch "$S/busy"
+	expected_passphrase
+	sleep "$UNLOCK_DELAY"
+	if [ "$REPLY" = "$EXPECTED" ]; then
+		touch "$S/unlocked/$CRYPTTAB_NAME"
+		rm -f "$S/busy"
+		echo "cryptsetup: $CRYPTTAB_NAME set up successfully" >&2
+		[ "$UNLOCK_ALL" = y ] && return 0 || exit 0
+	fi
+	tried=$(( CRYPTTAB_TRIED + 1 ))
+	echo "$tried" >"$S/tries/$CRYPTTAB_NAME"
+	echo $(( $(now_ms) + 1000 )) >"$S/next_prompt"
+	if [ $tried -ge $MAX_TRIES ] && [ $MAX_TRIES -gt 0 ]; then
+		touch "$S/gave_up"
+		rm -f "$S/busy"
+		echo "cryptsetup: maximum number of tries exceeded for $CRYPTTAB_NAME" >&2
+		exit 1
+	fi
+	rm -f "$S/busy"
+	echo "cryptsetup: cryptsetup failed, bad password or options?" >&2
+	return 1
+}
+
+
+if [ -t 0 ]; then
+	UNLOCK_ALL=y
+	while :; do
+		if ! wait_for_prompt; then
+			sleep 0.1
+			continue
+		fi
+		read -rs -p "Please unlock disk $CRYPTTAB_NAME: "; echo
+		wait_for_answer || true
+	done
+else
+	wait_for_prompt || exit 1
+	echo "Please unlock disk $CRYPTTAB_NAME"
+	REPLY=$(cat; printf x)
+	REPLY=${REPLY%x}
+	wait_for_answer || exit 1
+fi

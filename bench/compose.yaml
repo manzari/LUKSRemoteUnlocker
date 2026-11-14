@@ -1,0 +1,50 @@
+name: luks-bench
+
+x-target: &target
+  build:
+    context: .
+    target: target
+  init: true
+  stop_grace_period: 2s
+  networks: [bench]
+  healthcheck:
+    test: ["CMD", "test", "-s", "/run/bench/phase"]
+    interval: 10s
+    timeout: 3s
+    start_period: 60s
+    start_interval: 500ms
+
+services:
+  target1:
+    <<: *target
+    ports:
+      - "127.0.0.1:2201:2222"
+      - "127.0.0.1:2301:22"
+
+  target2:
+    <<: *target
+    environment:
+      DISKS: "sda3_crypt sdb1_crypt"
+    ports:
+      - "127.0.0.1:2202:2222"
+      - "127.0.0.1:2302:22"
+
+  target3:
+    <<: *target
+    ports:
+      - "127.0.0.1:2203:2222"
+      - "127.0.0.1:2303:22"
+
+  # stock OpenSSH client for bench/test.sh; only started with --profile test
+  client:
+    profiles: [test]
+    build:
+      context: .
+      target: client
+    init: true
+    stop_grace_period: 1s
+    networks: [bench]
+
+networks:
+  bench:
+    name: luks-bench

@@ -1,0 +1,163 @@
+#!/bin/bash
+# Supervisor: pre-boot Dropbear, then after the last unlock the "booted" sshd; serves bench-ctl requests.
+set -u
+
+B=/run/bench S=/run/bench/state C=/run/bench/ctl L=/var/lib/bench
+FAKE='busybox ash /usr/local/bin/fake-cryptroot-unlock'
+KEYTYPES="ed25519 ecdsa rsa"
+VARS="PASSPHRASE DISKS DISK_PASSPHRASES NOT_READY_SECONDS MAX_TRIES BOOT_DELAY PREBOOT_DELAY UNLOCK_DELAY"
+declare -A ENV0=(
+	[PASSPHRASE]=${PASSPHRASE-correct-horse-bench}
+	[DISKS]=${DISKS:-sda3_crypt}
+	[DISK_PASSPHRASES]=${DISK_PASSPHRASES-}
+	[NOT_READY_SECONDS]=${NOT_READY_SECONDS:-0}
+	[MAX_TRIES]=${MAX_TRIES:-3}
+	[BOOT_DELAY]=${BOOT_DELAY:-3}
+	[PREBOOT_DELAY]=${PREBOOT_DELAY:-0}
+	[UNLOCK_DELAY]=${UNLOCK_DELAY:-0.7}
+)
+DB_PID= SSHD_PID= PHASE= DUE=0 DRAIN_END=0
+
+log() { echo "bench: $*" >&2; }
+now_ms() { local t=${EPOCHREALTIME/./}; echo $(( t / 1000 )); }
+to_ms() { local i=${1%%.*} f; f=${1#"$i"}; f=${f#.}000; echo $(( 10#${i:-0} * 1000 + 10#${f:0:3} )); }
+q() { printf "'%s'" "${1//\'/\'\\\'\'}"; }
+
+gen_dropbear_keys() {
+	local t d=$L/dropbear.new
+	rm -rf "$d" && mkdir -p "$d"
+	for t in $KEYTYPES; do
+		dropbearkey -t "$t" -f "$d/dropbear_${t}_host_key" >/dev/null 2>&1 || { log "dropbearkey $t failed"; return 1; }
+	done
+	rm -rf "$L/dropbear" && mv "$d" "$L/dropbear"
+}
+
+gen_sshd_keys() {
+	local t
+	mkdir -p "$L/sshd"
+	for t in $KEYTYPES; do
+		[ -f "$L/sshd/ssh_host_${t}_key" ] || ssh-keygen -q -t "$t" -N '' -C booted -f "$L/sshd/ssh_host_${t}_key"
+	done
+}
+
+load_config() {
+	local k v f
+	for k in $VARS; do
+		v=${ENV0[$k]}
+		f=$L/overrides/$k
+		if [ -f "$f" ]; then v=$(cat "$f"; printf x); v=${v%x}; fi
+		printf '%s=%s\n' "$k" "$(q "$v")"
+		printf -v "$k" '%s' "$v"
+	done >"$B/config.new"
+	chmod 600 "$B/config.new" && mv "$B/config.new" "$B/config"
+}
+
+set_phase() { PHASE=$1; echo "$1" >"$B/phase"; log "$1"; }
+
+stop_dropbear() {
+	local sig=${1:-TERM} i
+	pkill "-$sig" -f "$FAKE" 2>/dev/null
+	pkill "-$sig" -x dropbear 2>/dev/null
+	[ -n "$DB_PID" ] && wait "$DB_PID" 2>/dev/null
+	for i in $(seq 50); do pgrep -x dropbear >/dev/null || break; sleep 0.02; done
+	pkill -KILL -x dropbear 2>/dev/null
+	DB_PID=
+	rm -f "$B/dropbear.pid"
+}
+
+stop_sshd() {
+	pkill -KILL -x sshd 2>/dev/null
+	pkill -KILL -x sshd-session 2>/dev/null
+	pkill -KILL -x sshd-auth 2>/dev/null
+	[ -n "$SSHD_PID" ] && wait "$SSHD_PID" 2>/dev/null
+	SSHD_PID=
+}
+
+start_dropbear() {
+	local t args=() i
+	for t in $KEYTYPES; do args+=(-r "$L/dropbear/dropbear_${t}_host_key"); done
+	rm -f "$B/dropbear.pid"
+	dropbear -F -E -p 2222 -s -j -k -c /usr/local/bin/fake-cryptroot-unlock "${args[@]}" -P "$B/dropbear.pid" &
+	DB_PID=$!
+	for i in $(seq 100); do [ -s "$B/dropbear.pid" ] && break; sleep 0.02; done
+	echo $(( $(now_ms) + $(to_ms "$NOT_READY_SECONDS") )) >"$S/ready_at"
+}
+
+start_sshd() {
+	mkdir -p /run/sshd
+	/usr/sbin/sshd -D -e -f /etc/bench/sshd_config &
+	SSHD_PID=$!
+}
+
+all_unlocked() {
+	local d
+	for d in $DISKS; do [ -e "$S/unlocked/$d" ] || return 1; done
+}
+
+reset_target() {
+	stop_dropbear KILL
+	stop_sshd
+	rm -rf "$S" && mkdir -p "$S/unlocked" "$S/tries"
+	load_config
+	set_phase preboot
+	DUE=$(( $(now_ms) + $(to_ms "$PREBOOT_DELAY") ))
+	[ "$(now_ms)" -lt "$DUE" ] || start_dropbear
+}
+
+handle_requests() {
+	local f id
+	for f in "$C"/req.*; do
+		[ -f "$f" ] || continue
+		id=${f##*/req.}
+		case $(cat "$f") in
+			reset) reset_target ;;
+			rotate) gen_dropbear_keys && log "new dropbear host keys"; reset_target ;;
+		esac
+		rm -f "$f"
+		touch "$C/ack.$id"
+	done
+}
+
+trap 'stop_dropbear KILL; stop_sshd; exit 0' TERM INT
+
+mkdir -p "$B" "$C" "$L"
+[ -d "$L/dropbear" ] || gen_dropbear_keys || exit 1
+gen_sshd_keys || exit 1
+reset_target
+
+while :; do
+	handle_requests
+	now=$(now_ms)
+	case $PHASE in
+		preboot)
+			if [ -z "$DB_PID" ]; then
+				[ "$now" -lt "$DUE" ] || start_dropbear
+			elif all_unlocked; then
+				set_phase booting
+				DRAIN_END=$(( now + 2000 ))
+			elif ! kill -0 "$DB_PID" 2>/dev/null; then
+				log "dropbear died, restarting"
+				DB_PID=
+			fi
+			;;
+		booting)
+			if [ -n "$DB_PID" ]; then
+				# like init-bottom, once the unlocking session has ended (at most 2 s): TERM sessions and listener
+				if { ! pgrep -f "$FAKE" >/dev/null && ! pgrep -P "$DB_PID" >/dev/null; } || [ "$now" -ge "$DRAIN_END" ]; then
+					stop_dropbear
+					DUE=$(( $(now_ms) + $(to_ms "$BOOT_DELAY") ))
+				fi
+			elif [ "$now" -ge "$DUE" ]; then
+				start_sshd
+				set_phase booted
+			fi
+			;;
+		booted)
+			if ! kill -0 "$SSHD_PID" 2>/dev/null; then
+				log "sshd died, restarting"
+				start_sshd
+			fi
+			;;
+	esac
+	sleep 0.1
+done

@@ -1,0 +1,98 @@
+#!/bin/bash
+set -euo pipefail
+
+B=/run/bench S=/run/bench/state C=/run/bench/ctl L=/var/lib/bench
+VARS=" PASSPHRASE DISKS DISK_PASSPHRASES NOT_READY_SECONDS MAX_TRIES BOOT_DELAY PREBOOT_DELAY UNLOCK_DELAY "
+
+usage() {
+	cat >&2 <<'EOF'
+usage: bench-ctl COMMAND
+  reset              back to locked pre-boot (host keys and `set` values kept)
+  set KEY=VALUE...   override parameters, then reset
+  clear              drop `set` values and `authorize`d keys, then reset
+  rotate-hostkey     new Dropbear host keys, then reset
+  authorize [LINE]   add an authorized_keys line (or read it from stdin)
+  status             phase (preboot|booting|booted), disks, listening port
+  fingerprint        pre-boot and post-boot host key fingerprints
+EOF
+	exit 2
+}
+die() { echo "bench-ctl: $*" >&2; exit 1; }
+
+request() {
+	local id=$$.$RANDOM i
+	mkdir -p "$C"
+	echo "$1" >"$C/.req.$id" && mv "$C/.req.$id" "$C/req.$id"
+	for i in $(seq 1200); do
+		if [ -e "$C/ack.$id" ]; then rm -f "$C/ack.$id"; return 0; fi
+		sleep 0.025
+	done
+	die "supervisor did not answer"
+}
+
+cmd_set() {
+	local kv k v
+	[ $# -gt 0 ] || usage
+	for kv; do
+		[[ $kv == *=* ]] || die "expected KEY=VALUE: $kv"
+		k=${kv%%=*} v=${kv#*=}
+		[[ $VARS == *" $k "* ]] || die "unknown key $k (known:$VARS)"
+		case $k in
+			NOT_READY_SECONDS | MAX_TRIES) [[ $v =~ ^[0-9]+$ ]] || die "$k must be an integer" ;;
+			*_DELAY) [[ $v =~ ^[0-9]+(\.[0-9]+)?$ ]] || die "$k must be a number of seconds" ;;
+		esac
+	done
+	mkdir -p "$L/overrides"
+	for kv; do printf '%s' "${kv#*=}" >"$L/overrides/${kv%%=*}"; done
+	request reset
+}
+
+cmd_authorize() {
+	local line
+	if [ $# -gt 0 ]; then line="$*"; else line=$(cat); fi
+	ssh-keygen -lf - <<<"$line" >/dev/null 2>&1 || die "not a public key line"
+	printf '%s\n' "$line" >>/root/.ssh/authorized_keys
+}
+
+cmd_status() {
+	local d u= l= t= port
+	cat "$B/phase"
+	. "$B/config"
+	for d in $DISKS; do
+		if [ -e "$S/unlocked/$d" ]; then u+=" $d"; else l+=" $d"; fi
+		t+=" $d=$(cat "$S/tries/$d" 2>/dev/null || echo 0)/$MAX_TRIES"
+	done
+	echo "unlocked:$u"
+	echo "locked:$l"
+	echo "tries:$t"
+	port=$(awk '$4 == "0A" { split($2, a, ":"); print a[2] }' /proc/net/tcp /proc/net/tcp6 2>/dev/null |
+		grep -xE '08AE|0016' | sort -u | while read -r h; do echo $((16#$h)); done | tr '\n' ' ' || true)
+	echo "listening: ${port% }"
+}
+
+fp() {
+	local line
+	while read -r line; do
+		case $line in ssh-* | ecdsa-*) printf '%s %s %s\n' "$1" "${line%% *}" "$(ssh-keygen -lf - <<<"$line" | cut -d' ' -f2)" ;; esac
+	done
+}
+
+cmd_fingerprint() {
+	local t
+	for t in ed25519 ecdsa rsa; do dropbearkey -y -f "$L/dropbear/dropbear_${t}_host_key" | fp preboot; done
+	for t in ed25519 ecdsa rsa; do fp postboot <"$L/sshd/ssh_host_${t}_key.pub"; done
+}
+
+[ $# -gt 0 ] || usage
+cmd=$1
+shift
+case $cmd in
+	reset) request reset ;;
+	set) cmd_set "$@" ;;
+	clear) rm -rf "$L/overrides" && install -m600 /etc/bench/authorized_keys /root/.ssh/authorized_keys && request reset ;;
+	rotate-hostkey) request rotate ;;
+	authorize) cmd_authorize "$@" ;;
+	status) cmd_status ;;
+	fingerprint) cmd_fingerprint ;;
+	*) usage ;;
+esac
