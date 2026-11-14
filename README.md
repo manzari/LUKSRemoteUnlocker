@@ -16,3 +16,4 @@ Everything runs in Docker (`tool/Dockerfile.dart`, `tool/Dockerfile.flutter`); n
 | `make shell-dart` / `shell-flutter` | Interactive shell in the toolchain container |
 | `make run-dart CMD="..."` / `run-flutter CMD="..."` | One command in the toolchain container |
 | `make bench-up` / `bench-down` | Start or remove the Dropbear test bench |
+| `make test-bench` | Engine and CLI tests against the running bench |

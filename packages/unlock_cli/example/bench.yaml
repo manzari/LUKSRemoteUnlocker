@@ -1,0 +1,22 @@
+# The Docker test bench (bench/README.md) as seen from a container on the
+# luks-bench network. Check and pin the pre-boot keys with
+#   docker compose -f bench/compose.yaml exec -T target1 bench-ctl fingerprint
+# The bench passphrase is correct-horse-bench unless changed with bench-ctl set.
+defaults:
+  user: root
+  key_file: ../../../bench/fixtures/id_ed25519_bench
+  wait_timeout: 1m
+  boot_timeout: 1m
+
+hosts:
+  - name: target1
+    group: bench
+    preboot: target1:2222
+    postboot: target1:22
+    # preboot_host_key: "ssh-ed25519 SHA256:..."
+
+  - name: target2
+    group: bench
+    preboot: [target2:2222]
+    postboot: target2:22
+    # preboot_host_key: "ssh-ed25519 SHA256:..."

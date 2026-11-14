@@ -22,11 +22,11 @@ IN_FLUTTER = $(RUN) -v $(FLUTTER_HOME_VOLUME):/home/dev $(FLUTTER_IMAGE)
 IN_DART_TTY = $(RUN) -it -v $(DART_HOME_VOLUME):/home/dev $(DART_IMAGE)
 IN_FLUTTER_TTY = $(RUN) -it -v $(FLUTTER_HOME_VOLUME):/home/dev $(FLUTTER_IMAGE)
 
-.PHONY: help images image-dart image-flutter test test-core test-cli test-app cli apk linux \
+.PHONY: help images image-dart image-flutter test test-core test-cli test-app test-bench cli apk linux \
 	shell-dart shell-flutter run-dart run-flutter bench-up bench-down clean
 
 help:
-	@echo "Targets: test test-core test-cli test-app cli apk linux shell-dart shell-flutter"
+	@echo "Targets: test test-core test-cli test-app test-bench cli apk linux shell-dart shell-flutter"
 	@echo "         run-dart CMD=... run-flutter CMD=... bench-up bench-down images clean"
 
 images: image-dart image-flutter
@@ -70,6 +70,16 @@ run-dart: image-dart
 
 run-flutter: image-flutter
 	$(IN_FLUTTER) bash -ec '$(CMD)'
+
+# Bench-tagged engine and CLI tests against target1/target2; assumes `make bench-up`.
+BENCH_RELAY_DIR := .dart_tool/bench-relay
+test-bench: image-dart
+	@bash packages/unlock_core/test/integration/bench_relay.sh "$(CURDIR)/$(BENCH_RELAY_DIR)" bench/compose.yaml & \
+	relay=$$!; trap 'kill $$relay 2>/dev/null' EXIT; \
+	$(RUN) --network luks-bench -e BENCH=1 -e BENCH_RELAY_DIR=/work/$(BENCH_RELAY_DIR) \
+		-v $(DART_HOME_VOLUME):/home/dev $(DART_IMAGE) bash -ec 'dart pub get >/dev/null; \
+		cd packages/unlock_core; dart test -j 1 --tags bench $(ARGS) test/integration; \
+		cd ../unlock_cli; dart test -j 1 --tags bench $(ARGS) test'
 
 bench-up:
 	docker compose -f bench/compose.yaml up -d --build
