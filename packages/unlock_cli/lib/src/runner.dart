@@ -5,18 +5,22 @@ import 'dart:typed_data';
 import 'package:args/args.dart';
 import 'package:unlock_core/unlock_core.dart';
 
+import 'common.dart';
 import 'config.dart';
 import 'passphrase.dart';
+import 'vault_commands.dart';
+import 'vault_files.dart';
 
-const String executableName = 'luks-unlock';
-const String cliVersion = '0.1.0';
-
-const int exitUsage = 64;
-
-ArgParser buildParser() => ArgParser()
-  ..addFlag('help', abbr: 'h', negatable: false, help: 'Show this help.')
-  ..addFlag('version', negatable: false, help: 'Print the version.')
-  ..addCommand('unlock', unlockParser());
+ArgParser buildParser() {
+  final p = ArgParser()
+    ..addFlag('help', abbr: 'h', negatable: false, help: 'Show this help.')
+    ..addFlag('version', negatable: false, help: 'Print the version.')
+    ..addCommand('unlock', unlockParser());
+  for (final g in vaultGroups) {
+    p.addCommand(g, groupParser(g));
+  }
+  return p;
+}
 
 ArgParser unlockParser() => ArgParser()
   ..addOption(
@@ -48,20 +52,35 @@ ArgParser unlockParser() => ArgParser()
     valueHelp: 'N',
     help: 'Read the passphrase byte for byte from this file descriptor.',
   )
+  ..addOption(
+    'vault',
+    valueHelp: 'PATH',
+    help: 'Vault for key: and secret: labels (default as for vault commands).',
+  )
+  ..addOption(
+    'password-fd',
+    valueHelp: 'N',
+    help: 'Read the vault password byte for byte from this file descriptor.',
+  )
   ..addFlag('help', abbr: 'h', negatable: false, help: 'Show this help.');
 
 String usage(ArgParser parser) =>
     'Usage: $executableName <command> [options]\n\n'
     'Unlocks LUKS-encrypted servers waiting at the Dropbear pre-boot prompt.\n\n'
     'Commands:\n'
-    '  unlock   Unlock hosts from a YAML config\n\n'
+    '  unlock   Unlock hosts from a YAML config\n'
+    '  vault    Create the vault, show its status, change its password\n'
+    '  key      Generate, import, list, show and remove SSH login keys\n'
+    '  secret   Add, list and remove LUKS passphrases\n\n'
     '${parser.usage}';
 
 String unlockUsage() =>
     'Usage: $executableName unlock --config hosts.yaml '
-    '(--host NAME ... | --group G | --all) [--accept-new-host-key] [--passphrase-fd N]\n\n'
+    '(--host NAME ... | --group G | --all) [--accept-new-host-key] [--passphrase-fd N]\n'
+    '       [--vault PATH] [--password-fd N]\n\n'
     'Reads one passphrase from stdin (no echo on a terminal) unless every selected\n'
-    'host has a passphrase_file. Exit status: 0 if every host ended Unlocked or\n'
+    'host has a passphrase_file or secret. Hosts with key: or secret: labels unlock the\n'
+    'vault first (one password prompt). Exit status: 0 if every host ended Unlocked or\n'
     'Already up, 1 otherwise, 64 on usage or config errors.\n\n'
     '${unlockParser().usage}';
 
@@ -74,6 +93,9 @@ Future<int> runCli(
   required StringSink err,
   PassphraseReader? readPassphrase,
   EngineFactory? newEngine,
+  SecretInput? input,
+  VaultTuning tuning = const VaultTuning(),
+  Map<String, String>? environment,
 }) async {
   final parser = buildParser();
   final ArgResults results;
@@ -95,29 +117,42 @@ Future<int> runCli(
     out.writeln(usage(parser));
     return 0;
   }
+  final vaults = VaultCli(
+    out: out,
+    err: err,
+    input: input ?? const TerminalSecretInput(),
+    environment: environment ?? Platform.environment,
+    tuning: tuning,
+  );
+  if (command.name != 'unlock') return vaults.run(command);
   return _Unlock(
     command,
     out,
     err,
     readPassphrase ?? const TerminalPassphraseReader(),
     newEngine,
+    vaults,
   ).run();
 }
 
-final class _UsageError implements Exception {
-  const _UsageError(this.message);
-
-  final String message;
-}
-
 final class _Unlock {
-  _Unlock(this.args, this.out, this.err, this.reader, this.newEngine);
+  _Unlock(
+    this.args,
+    this.out,
+    this.err,
+    this.reader,
+    this.newEngine,
+    this.vaults,
+  );
+
+  static const _help = 'unlock';
 
   final ArgResults args;
   final StringSink out;
   final StringSink err;
   final PassphraseReader reader;
   final EngineFactory? newEngine;
+  final VaultCli vaults;
   final _secrets = <Uint8List>[];
 
   Future<int> run() async {
@@ -127,17 +162,23 @@ final class _Unlock {
     }
     final List<HostPlan> plans;
     try {
-      plans = _prepare();
-    } on _UsageError catch (e) {
+      plans = await _prepare();
+    } on CliExit catch (e) {
       _wipe();
-      err
-        ..writeln('$executableName: ${e.message}')
-        ..writeln("Run '$executableName unlock --help' for usage.");
-      return exitUsage;
+      e.report(err);
+      return e.code;
     } on ConfigException catch (e) {
       _wipe();
       err.writeln('$executableName: $e');
       return exitUsage;
+    } on VaultException catch (e) {
+      _wipe();
+      err.writeln('$executableName: vault: ${e.message}');
+      return exitFailure;
+    } on FileSystemException catch (e) {
+      _wipe();
+      err.writeln('$executableName: ${e.path ?? e.message}: ${osMessage(e)}');
+      return exitFailure;
     }
     try {
       return await _run(plans);
@@ -146,33 +187,31 @@ final class _Unlock {
     }
   }
 
-  List<HostPlan> _prepare() {
+  Future<List<HostPlan>> _prepare() async {
     if (args.rest.isNotEmpty) {
-      throw _UsageError('unexpected argument ${args.rest.first}');
+      throw CliExit.usage('unexpected argument ${args.rest.first}', _help);
     }
     final path = args.option('config');
-    if (path == null) throw const _UsageError('--config is required');
+    if (path == null) throw const CliExit.usage('--config is required', _help);
     final names = args.multiOption('host');
     final groups = args.multiOption('group');
     final all = args.flag('all');
     final modes = [names.isNotEmpty, groups.isNotEmpty, all].where((m) => m);
     if (modes.length != 1) {
-      throw const _UsageError('choose exactly one of --host, --group or --all');
-    }
-    final fdText = args.option('passphrase-fd');
-    final fd = fdText == null ? null : int.tryParse(fdText);
-    if (fdText != null && (fd == null || fd < 0)) {
-      throw _UsageError(
-        '--passphrase-fd needs a file descriptor number, not $fdText',
+      throw const CliExit.usage(
+        'choose exactly one of --host, --group or --all',
+        _help,
       );
     }
+    final fd = fdOption(args, 'passphrase-fd', _help);
+    final passwordFd = fdOption(args, 'password-fd', _help);
 
     final config = CliConfig.load(path);
     final selected = <CliHost>[];
     if (names.isNotEmpty) {
       for (final n in names) {
         final h = config.hosts.where((h) => h.host.name == n);
-        if (h.isEmpty) throw _UsageError('no host named $n in $path');
+        if (h.isEmpty) throw CliExit.usage('no host named $n in $path', _help);
         if (!selected.contains(h.first)) selected.add(h.first);
       }
     } else {
@@ -182,35 +221,72 @@ final class _Unlock {
         ),
       );
     }
-    if (selected.isEmpty) throw const _UsageError('no enabled host selected');
+    if (selected.isEmpty) {
+      throw const CliExit.usage('no enabled host selected', _help);
+    }
 
-    final keys = {
-      for (final h in selected) h.host.name: _readFile(h.keyFile, 'key_file'),
+    final keyFiles = {
+      for (final h in selected)
+        if (h.keyFile case final f?) h.host.name: _readFile(f, 'key_file'),
     };
+    final passFiles = {
+      for (final h in selected)
+        if (h.passphraseFile case final f?)
+          h.host.name: _secretFile(f, 'passphrase_file'),
+    };
+    final diskFiles = {
+      for (final h in selected)
+        h.host.name: {
+          for (final e in h.diskPassphraseFiles.entries)
+            e.key: _secretFile(e.value, 'disk_passphrase_files'),
+        },
+    };
+
+    final refs = <VaultRef>[
+      for (final h in selected) ...[
+        if (h.keyLabel case final l?)
+          (where: h.host.name, kind: LabelKind.key, label: l),
+        if (h.secretLabel case final l?)
+          (where: h.host.name, kind: LabelKind.secret, label: l),
+        for (final l in h.diskSecrets.values)
+          (where: h.host.name, kind: LabelKind.secret, label: l),
+      ],
+    ];
+    final fromVault = <(LabelKind, String), Uint8List>{};
+    if (refs.isNotEmpty) {
+      final loc = VaultLocation.resolve(
+        args.option('vault'),
+        vaults.environment,
+      );
+      fromVault.addAll(await vaults.readForRun(loc, refs, passwordFd));
+      _secrets.addAll(fromVault.values);
+    }
+
     Uint8List? shared;
-    if (selected.any((h) => h.passphraseFile == null)) {
+    if (selected.any((h) => h.usesStdin)) {
       try {
         shared = _keep(reader.read(fd: fd, prompt: err));
       } on FileSystemException catch (e) {
-        throw _UsageError(
-          'cannot read the passphrase: ${e.osError?.message ?? e.message}',
-        );
+        throw CliExit.usage('cannot read the passphrase: ${osMessage(e)}');
       }
-      if (shared.isEmpty) throw const _UsageError('the passphrase is empty');
+      if (shared.isEmpty) {
+        throw const CliExit.usage('the passphrase is empty', _help);
+      }
     }
+    Uint8List secret(String label) => fromVault[(LabelKind.secret, label)]!;
     return [
       for (final h in selected)
         HostPlan(
           host: h.host,
-          privateKeyPem: keys[h.host.name]!,
+          privateKeyPem:
+              keyFiles[h.host.name] ?? fromVault[(LabelKind.key, h.keyLabel)]!,
           profile: h.profile,
           secrets: DiskPassphrases(
-            h.passphraseFile == null
-                ? shared!
-                : _secretFile(h.passphraseFile!, 'passphrase_file'),
+            passFiles[h.host.name] ??
+                (h.secretLabel == null ? shared! : secret(h.secretLabel!)),
             perDisk: {
-              for (final e in h.diskPassphraseFiles.entries)
-                e.key: _secretFile(e.value, 'disk_passphrase_files'),
+              ...diskFiles[h.host.name]!,
+              for (final e in h.diskSecrets.entries) e.key: secret(e.value),
             },
           ),
         ),
@@ -221,7 +297,7 @@ final class _Unlock {
     try {
       return _keep(File(path).readAsBytesSync());
     } on FileSystemException catch (e) {
-      throw ConfigException('$what $path: ${e.osError?.message ?? e.message}');
+      throw ConfigException('$what $path: ${osMessage(e)}');
     }
   }
 

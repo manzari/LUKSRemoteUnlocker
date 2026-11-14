@@ -91,7 +91,7 @@ hosts:
     );
     expect(
       () => parse('hosts:\n  - {name: a, preboot: a}'),
-      configError('key_file is required'),
+      configError('key_file or key is required'),
     );
     expect(
       () => parse('hosts:\n  - {name: a, preboot: "a:x", key_file: k}'),
@@ -145,11 +145,80 @@ hosts:
     expect(() => parse(': : :'), throwsA(isA<ConfigException>()));
   });
 
+  test('vault labels instead of files and stdin', () {
+    final c = parse('''
+defaults:
+  key: laptop
+hosts:
+  - name: a
+    preboot: a
+    secret: nas
+    disk_secrets: {sdb1_crypt: data}
+    disk_passphrase_files: {sdc1_crypt: f}
+  - {name: b, preboot: b, key_file: k}
+  - {name: c, preboot: c, passphrase_file: p}
+''');
+    final [a, b, other] = c.hosts;
+    expect(a.keyLabel, 'laptop');
+    expect(a.keyFile, isNull);
+    expect(a.secretLabel, 'nas');
+    expect(a.diskSecrets, {'sdb1_crypt': 'data'});
+    expect(a.diskPassphraseFiles, {'sdc1_crypt': '/cfg/f'});
+    expect(a.usesVault, isTrue);
+    expect(a.usesStdin, isFalse);
+    expect(b.keyFile, '/cfg/k');
+    expect(b.keyLabel, isNull);
+    expect(b.usesVault, isFalse);
+    expect(b.usesStdin, isTrue);
+    expect(other.keyLabel, 'laptop');
+    expect(other.usesStdin, isFalse);
+    expect(
+      parse(
+        'defaults: {key_file: k}\nhosts:\n  - {name: a, preboot: a, key: x}',
+      ).hosts.single.keyFile,
+      isNull,
+    );
+  });
+
+  test('vault label errors', () {
+    expect(
+      () => parse('hosts:\n  - {name: a, preboot: a, key: x, key_file: k}'),
+      configError('use either key_file or key'),
+    );
+    expect(
+      () => parse(
+        'hosts:\n  - {name: a, preboot: a, key: x, secret: s, passphrase_file: p}',
+      ),
+      configError('use either passphrase_file or secret'),
+    );
+    expect(
+      () => parse(
+        'hosts:\n  - {name: a, preboot: a, key: x, disk_secrets: {d: s}, '
+        'disk_passphrase_files: {d: f}}',
+      ),
+      configError('disk d is in both'),
+    );
+    expect(
+      () => parse('hosts:\n  - {name: a, preboot: a, key: "a b"}'),
+      configError('key: invalid label "a b"'),
+    );
+    expect(
+      () => parse(
+        'hosts:\n  - {name: a, preboot: a, key: x, disk_secrets: {d: "-x"}}',
+      ),
+      configError('disk_secrets: invalid label'),
+    );
+    expect(
+      () => parse('defaults: {secret: s}\nhosts:\n  - {name: a, preboot: a}'),
+      configError('unknown key "secret"'),
+    );
+  });
+
   test('the bench example parses', () {
     final c = CliConfig.load('example/bench.yaml');
     expect(c.hosts.map((h) => h.host.name), ['target1', 'target2']);
     expect(c.hosts.first.host.preboot, [const Endpoint('target1', 2222)]);
-    expect(File(c.hosts.first.keyFile).existsSync(), isTrue);
+    expect(File(c.hosts.first.keyFile!).existsSync(), isTrue);
   });
 
   test('durations', () {

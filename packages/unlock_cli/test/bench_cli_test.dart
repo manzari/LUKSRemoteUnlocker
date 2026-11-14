@@ -101,6 +101,7 @@ Future<Run> luksUnlock(
   List<String> args, {
   List<int>? input,
   String? shell,
+  Map<String, String> env = const {},
 }) async {
   final dart = Platform.resolvedExecutable;
   final p = shell == null
@@ -108,7 +109,7 @@ Future<Run> luksUnlock(
       : await Process.start(
           'bash',
           ['-c', shell, 'bash', dart, ...args],
-          environment: {'PASS': pass},
+          environment: {'PASS': pass, ...env},
         );
   final out = <int>[];
   final err = <int>[];
@@ -127,6 +128,8 @@ Future<Run> luksUnlock(
 
 void main() {
   group('luks-unlock against the bench', skip: benchSkip, () {
+    tearDownAll(() => ctl(t1, ['clear']));
+
     test('success: exit 0, passphrase never in stdout or stderr', () async {
       final pinned = await prepare();
       final r = await luksUnlock([
@@ -232,6 +235,82 @@ void main() {
       expect(newline.stdout, contains('Wrong passphrase'));
       expect(await tries(), 1);
       newline.expectNoSecret(pass);
+    });
+
+    test('vault: generated key and stored secret unlock by label', () async {
+      const vaultPass = 'fake-cli-bench-vault-pass';
+      final pinned = await prepare();
+      final dir = Directory('${work.path}/vault');
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final vault = '${dir.path}/vault.json';
+      final cfg = File('${work.path}/vault-hosts.yaml')
+        ..writeAsStringSync('''
+hosts:
+  - name: $t1
+    preboot: ${env['BENCH_TARGET1_PREBOOT'] ?? 'target1:2222'}
+    postboot: ${env['BENCH_TARGET1_POSTBOOT'] ?? 'target1:22'}
+    key: bench-gen
+    secret: bench-luks
+    preboot_host_key: "$pinned"
+    wait_timeout: 40s
+    boot_timeout: 40s
+''');
+      const withPassword =
+          r'exec "$1" run bin/luks_unlock.dart "${@:2}" --password-fd 3 3< <(printf %s "$VPW")';
+      final runs = <Run>[];
+      Future<Run> step(List<String> args, [String fds = '']) async {
+        final r = await luksUnlock(
+          [...args, '--vault', vault],
+          shell: '$withPassword$fds',
+          env: {'VPW': vaultPass},
+        );
+        runs.add(r);
+        return r;
+      }
+
+      expect((await step(['vault', 'init'])).code, 0);
+      final gen = await step([
+        'key',
+        'generate',
+        '--label',
+        'bench-gen',
+        '--comment',
+        'luks-unlock-bench',
+      ]);
+      expect(gen.code, 0);
+      final publicLine = gen.stdout.split('\n').first;
+      expect(publicLine, startsWith('ssh-ed25519 AAAA'));
+      expect(
+        (await step([
+          'secret',
+          'add',
+          '--label',
+          'bench-luks',
+          '--secret-fd',
+          '4',
+        ], r' 4< <(printf %s "$PASS")')).code,
+        0,
+      );
+      final unlock = ['unlock', '-c', cfg.path, '--host', t1];
+
+      final refused = await step(unlock);
+      expect(refused.code, 1);
+      expect(refused.stdout, contains('[$t1] Auth failed'));
+      expect(await tries(), 0);
+
+      await ctl(t1, ['authorize', publicLine]);
+      final ok = await step(unlock);
+      expect(ok.code, 0);
+      expect(
+        ok.stdout,
+        contains('[$t1] Unlocked: booted (unlocked sda3_crypt)'),
+      );
+      for (final r in runs) {
+        r
+          ..expectNoSecret(pass)
+          ..expectNoSecret(vaultPass);
+      }
     });
   });
 }

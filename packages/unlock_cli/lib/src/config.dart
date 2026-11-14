@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:unlock_core/engine.dart';
 import 'package:yaml/yaml.dart';
 
+import 'vault_files.dart';
+
 final class ConfigException implements Exception {
   const ConfigException(this.message);
 
@@ -12,21 +14,37 @@ final class ConfigException implements Exception {
   String toString() => message;
 }
 
-/// A host from the YAML file plus where its key and secrets live.
+/// A host from the YAML file plus where its key and secrets live: files, stdin or vault labels.
 final class CliHost {
   const CliHost({
     required this.host,
-    required this.keyFile,
     required this.profile,
+    this.keyFile,
+    this.keyLabel,
     this.passphraseFile,
+    this.secretLabel,
     this.diskPassphraseFiles = const {},
+    this.diskSecrets = const {},
   });
 
   final Host host;
-  final String keyFile;
   final UnlockProfile profile;
+
+  /// Exactly one of [keyFile] and [keyLabel] is set.
+  final String? keyFile;
+  final String? keyLabel;
   final String? passphraseFile;
+  final String? secretLabel;
   final Map<String, String> diskPassphraseFiles;
+
+  /// Disk name to secret label.
+  final Map<String, String> diskSecrets;
+
+  bool get usesVault =>
+      keyLabel != null || secretLabel != null || diskSecrets.isNotEmpty;
+
+  /// The default passphrase comes from stdin or --passphrase-fd.
+  bool get usesStdin => passphraseFile == null && secretLabel == null;
 }
 
 final class CliConfig {
@@ -40,8 +58,11 @@ final class CliConfig {
     'preboot',
     'user',
     'key_file',
+    'key',
     'passphrase_file',
+    'secret',
     'disk_passphrase_files',
+    'disk_secrets',
     'postboot',
     'postboot_check',
     'preboot_host_key',
@@ -55,6 +76,7 @@ final class CliConfig {
   static const _defaultKeys = {
     'user',
     'key_file',
+    'key',
     'postboot_check',
     'wait_timeout',
     'boot_timeout',
@@ -98,8 +120,14 @@ final class CliConfig {
     final names = <String>{};
     for (final (i, raw) in list.indexed) {
       final where = '$source: hosts[$i]';
-      final h = {...defaults, ..._map(raw, where)};
-      _onlyKeys(_map(raw, where), _hostKeys, where);
+      final own = _map(raw, where);
+      _onlyKeys(own, _hostKeys, where);
+      final h = {...defaults, ...own};
+      // A key source set on the host replaces the one from defaults.
+      if (own.containsKey('key') || own.containsKey('key_file')) {
+        if (!own.containsKey('key')) h.remove('key');
+        if (!own.containsKey('key_file')) h.remove('key_file');
+      }
       final host = _host(h, where, baseDir);
       if (!names.add(host.host.name)) {
         throw ConfigException('$where: duplicate name ${host.host.name}');
@@ -136,8 +164,30 @@ final class CliConfig {
       throw ConfigException('$where: name is required');
     }
     final at = '$where ($name)';
+    String? label(String k) {
+      final v = str(k);
+      if (v != null && !labelPattern.hasMatch(v)) {
+        throw ConfigException('$at: $k: invalid label "$v"');
+      }
+      return v;
+    }
+
     final keyFile = str('key_file');
-    if (keyFile == null) throw ConfigException('$at: key_file is required');
+    final keyLabel = label('key');
+    if ((keyFile == null) == (keyLabel == null)) {
+      throw ConfigException(
+        keyFile == null
+            ? '$at: key_file or key is required'
+            : '$at: use either key_file or key, not both',
+      );
+    }
+    final passphraseFile = str('passphrase_file');
+    final secretLabel = label('secret');
+    if (passphraseFile != null && secretLabel != null) {
+      throw ConfigException(
+        '$at: use either passphrase_file or secret, not both',
+      );
+    }
     final pre = h['preboot'];
     final preList = pre is List ? pre : <Object?>[?pre];
     if (preList.isEmpty) throw ConfigException('$at: preboot is required');
@@ -150,9 +200,24 @@ final class CliConfig {
     final post = h['postboot'] == null
         ? null
         : parsed('postboot', Endpoint.parse);
-    final disks = h['disk_passphrase_files'];
-    if (disks != null && disks is! Map) {
-      throw ConfigException('$at: disk_passphrase_files must be a map');
+    Map<String, String> disks(String k) {
+      final v = h[k];
+      if (v == null) return const {};
+      if (v is! Map) throw ConfigException('$at: $k must be a map');
+      return {for (final e in v.entries) '${e.key}': '${e.value}'};
+    }
+
+    final diskFiles = disks('disk_passphrase_files');
+    final diskSecrets = disks('disk_secrets');
+    for (final e in diskSecrets.entries) {
+      if (diskFiles.containsKey(e.key)) {
+        throw ConfigException(
+          '$at: disk ${e.key} is in both disk_passphrase_files and disk_secrets',
+        );
+      }
+      if (!labelPattern.hasMatch(e.value)) {
+        throw ConfigException('$at: disk_secrets: invalid label "${e.value}"');
+      }
     }
     final command = str('command');
 
@@ -188,7 +253,8 @@ final class CliConfig {
     }
     return CliHost(
       host: host,
-      keyFile: resolvePath(keyFile, baseDir),
+      keyFile: keyFile == null ? null : resolvePath(keyFile, baseDir),
+      keyLabel: keyLabel,
       profile: command == null
           ? UnlockProfile.debian
           : UnlockProfile.debian.copyWith(
@@ -197,13 +263,14 @@ final class CliConfig {
               command: command,
               builtIn: false,
             ),
-      passphraseFile: str('passphrase_file') == null
+      passphraseFile: passphraseFile == null
           ? null
-          : resolvePath(str('passphrase_file')!, baseDir),
+          : resolvePath(passphraseFile, baseDir),
+      secretLabel: secretLabel,
       diskPassphraseFiles: {
-        for (final e in ((disks as Map?) ?? const {}).entries)
-          '${e.key}': resolvePath('${e.value}', baseDir),
+        for (final e in diskFiles.entries) e.key: resolvePath(e.value, baseDir),
       },
+      diskSecrets: diskSecrets,
     );
   }
 

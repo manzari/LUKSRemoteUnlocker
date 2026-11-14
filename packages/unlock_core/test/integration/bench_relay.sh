@@ -10,7 +10,7 @@ answer() {
 	shift 2
 	case $target in target1 | target2) ;; *) echo "relay: target $target not allowed"; return 2 ;; esac
 	case $cmd in
-		reset | set | clear | rotate-hostkey | status | fingerprint)
+		reset | set | clear | rotate-hostkey | status | fingerprint | authorize)
 			docker compose -f "$COMPOSE" exec -T "$target" bench-ctl "$cmd" "$@" 2>&1 ;;
 		logs) docker compose -f "$COMPOSE" logs --no-log-prefix --since "$1" "$target" 2>&1 ;;
 		*) echo "relay: command $cmd not allowed"; return 2 ;;
