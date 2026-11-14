@@ -17,9 +17,8 @@ android {
     defaultConfig {
         // Placeholder application id; final id still to be decided.
         applicationId = "cc.b0t.luksremoteunlocker"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        // biometric_vault needs API 24.
+        minSdk = 24
         targetSdk = flutter.targetSdkVersion
         // Uses the version code from pubspec.yaml. When using split APKs, 1000 * ABI_VERSION
         // is added automatically by Flutter. (https://developer.android.com/studio/build/configure-apk-splits#configure-APK-versions)
@@ -46,4 +45,9 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    // Theme.AppCompat for the biometric prompt.
+    implementation("androidx.appcompat:appcompat:1.7.1")
 }
