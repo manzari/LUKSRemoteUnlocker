@@ -1,2 +1,16 @@
 .idea/
 *.iml
+
+# Dart / Flutter
+.dart_tool/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+
+# Local caches and editor junk
+.cache/
+.DS_Store
+*.swp
+*.log

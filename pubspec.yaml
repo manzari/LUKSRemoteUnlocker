@@ -1,0 +1,9 @@
+name: luks_remote_unlocker_workspace
+publish_to: none
+
+environment:
+  sdk: ^3.14.0
+
+workspace:
+  - packages/unlock_core
+  - packages/unlock_cli

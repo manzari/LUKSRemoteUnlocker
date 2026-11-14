@@ -1,0 +1,22 @@
+name: luks_remote_unlocker
+description: "LUKS Remote Unlocker"
+publish_to: none
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.14.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  material_ui: ^1.1.0
+  unlock_core:
+    path: ../packages/unlock_core
+
+dev_dependencies:
+  flutter_lints: ^6.0.0
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true

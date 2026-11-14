@@ -1,0 +1,21 @@
+name: unlock_cli
+description: Command-line LUKS unlocker built on unlock_core.
+version: 0.1.0
+publish_to: none
+resolution: workspace
+
+environment:
+  sdk: ^3.14.0
+
+executables:
+  luks-unlock: luks_unlock
+
+dependencies:
+  args: ^2.7.0
+  unlock_core:
+    path: ../unlock_core
+  yaml: ^3.1.4
+
+dev_dependencies:
+  lints: ^6.1.0
+  test: ^1.33.0

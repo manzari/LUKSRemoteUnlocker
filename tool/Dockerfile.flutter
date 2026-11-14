@@ -1,0 +1,54 @@
+FROM ghcr.io/cirruslabs/android-sdk:36@sha256:f9b3ea9ed2b5fc9522adae82c7b4622ab7aa54207ef532c8e615a347dca08f31 AS android
+
+FROM ubuntu:noble-20261110
+
+ARG UID=1000
+ARG GID=1000
+ARG FLUTTER_VERSION=3.50.0
+ARG FLUTTER_SHA256=6ea2d806fd57269ae783e6788e2a81fc26eaad782f1e0d0ff38623bb765ff9f5
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    LANG=C.UTF-8
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ca-certificates curl git unzip xz-utils zip file openssh-client \
+      openjdk-21-jdk-headless \
+      clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-14-dev \
+      libsecret-1-dev libsqlite3-dev \
+      xvfb xauth libgl1-mesa-dri libegl1 \
+ && rm -rf /var/lib/apt/lists/* \
+ && (userdel -r ubuntu 2>/dev/null || true) \
+ && (getent group "${GID}" >/dev/null || groupadd -g "${GID}" dev) \
+ && useradd -o -m -u "${UID}" -g "${GID}" -s /bin/bash dev \
+ && install -d -o "${UID}" -g "${GID}" /opt/flutter /work
+
+COPY --from=android --chown=${UID}:${GID} /opt/android-sdk-linux /opt/android-sdk
+
+USER dev
+ENV HOME=/home/dev \
+    PUB_CACHE=/home/dev/.pub-cache \
+    ANDROID_HOME=/opt/android-sdk \
+    ANDROID_SDK_ROOT=/opt/android-sdk \
+    PATH=/opt/flutter/bin:/home/dev/.pub-cache/bin:/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+RUN curl -fsSL -o /tmp/flutter.tar.xz \
+      "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_${FLUTTER_VERSION}-stable.tar.xz" \
+ && echo "${FLUTTER_SHA256}  /tmp/flutter.tar.xz" | sha256sum -c - \
+ && tar -xJf /tmp/flutter.tar.xz -C /opt \
+ && rm /tmp/flutter.tar.xz
+
+RUN flutter config --no-analytics --no-cli-animations \
+ && dart --disable-analytics >/dev/null \
+ && (yes | flutter doctor --android-licenses >/dev/null) \
+ && flutter precache --android --linux --no-ios --no-web --no-macos --no-windows
+
+# Throwaway build pulls the NDK, Gradle and AGP versions this Flutter release expects into the image.
+RUN cd /tmp \
+ && flutter create --platforms=android,linux --project-name warmup warmup \
+ && cd warmup \
+ && flutter build apk --debug \
+ && flutter build linux --debug \
+ && cd / && rm -rf /tmp/warmup
+
+WORKDIR /work
