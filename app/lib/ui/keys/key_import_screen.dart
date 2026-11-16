@@ -8,6 +8,7 @@ import 'package:unlock_core/keys.dart';
 import '../../data/errors.dart';
 import '../../providers.dart';
 import '../../services/key_import.dart';
+import '../common/label_dialog.dart';
 import '../common/messages.dart';
 import '../common/password_fields.dart';
 import '../vault/unlock.dart';
@@ -141,6 +142,9 @@ class _KeyImportScreenState extends ConsumerState<KeyImportScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final taken =
+        ref.watch(keysProvider).value?.map((k) => k.label).toList() ??
+        const <String>[];
     return Scaffold(
       appBar: AppBar(title: const Text('Import key')),
       body: Form(
@@ -158,8 +162,7 @@ class _KeyImportScreenState extends ConsumerState<KeyImportScreen> {
               key: const ValueKey('key-label'),
               controller: _label,
               decoration: const InputDecoration(labelText: 'Label'),
-              validator: (v) =>
-                  (v ?? '').trim().isEmpty ? 'Enter a label' : null,
+              validator: (v) => validateLabel(v, taken),
             ),
             const SizedBox(height: 16),
             Row(

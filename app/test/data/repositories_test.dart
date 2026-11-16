@@ -1,4 +1,4 @@
-import 'package:drift/drift.dart' show driftRuntimeOptions;
+import 'package:drift/drift.dart' show Value, driftRuntimeOptions;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:luks_remote_unlocker/data/database.dart';
 import 'package:luks_remote_unlocker/data/drift_vault_store.dart';
@@ -125,6 +125,43 @@ void main() {
       expect(list.map((h) => h.name), ['beta', 'alpha', 'zeta']);
     });
 
+    test(
+      'an unreadable row is left out instead of breaking the list',
+      () async {
+        final key = await keys.add(
+          vault,
+          const SshKeyService().generateEd25519(),
+          label: 'k',
+        );
+        final secret = await secrets.add(
+          vault,
+          label: 's',
+          passphrase: bytesOf('FAKE'),
+        );
+        await hosts.save(host('good'));
+        await hosts.save(host('bad', keyId: key.id, secretId: secret.id));
+        await hosts.save(host('bad-disks', disks: {'sdb': secret.id}));
+        await (db.update(db.hosts)..where((h) => h.id.equals('id-bad'))).write(
+          const HostsCompanion(prebootJson: Value('{not json')),
+        );
+        await (db.update(
+          db.hosts,
+        )..where((h) => h.id.equals('id-bad-disks'))).write(
+          const HostsCompanion(diskOverridesJson: Value('{"sdb": 1}')),
+        );
+
+        expect((await hosts.watchAll().first).map((h) => h.name), ['good']);
+        expect((await hosts.all()).map((h) => h.name), ['good']);
+        expect(await hosts.get('id-bad'), isNull);
+        expect(await hosts.namesUsingKey(key.id), ['bad']);
+        expect(await hosts.namesUsingSecret(secret.id), ['bad']);
+        await expectLater(
+          keys.delete(vault, key.id),
+          throwsA(isA<InUseException>()),
+        );
+      },
+    );
+
     test('invalid hosts are refused', () async {
       await expectLater(
         hosts.save(
@@ -195,6 +232,40 @@ void main() {
       expect(await store.listRecordIds(), isEmpty);
     });
 
+    test('labels are unique, trimmed and in any case', () async {
+      await keys.add(
+        vault,
+        const SshKeyService().generateEd25519(),
+        label: 'Laptop',
+      );
+      await expectLater(
+        keys.add(
+          vault,
+          const SshKeyService().generateEd25519(),
+          label: ' laptop ',
+        ),
+        throwsA(
+          isA<DuplicateLabelException>().having(
+            (e) => e.message,
+            'message',
+            'A key labelled "laptop" already exists. Choose another label.',
+          ),
+        ),
+      );
+      expect(await store.listRecordIds(), hasLength(1));
+      final other = await keys.add(
+        vault,
+        const SshKeyService().generateEd25519(),
+        label: 'desktop',
+      );
+      await expectLater(
+        keys.rename(other.id, 'LAPTOP'),
+        throwsA(isA<DuplicateLabelException>()),
+      );
+      await keys.rename(other.id, 'Desktop');
+      expect((await keys.get(other.id))!.label, 'Desktop');
+    });
+
     test('rename keeps the vault record', () async {
       final stored = await keys.add(
         vault,
@@ -228,6 +299,29 @@ void main() {
       await secrets.replace(vault, s.id, bytesOf('FAKE-new'));
       expect(await secrets.reveal(vault, s.id), bytesOf('FAKE-new'));
       expect(await store.listRecordIds(), [s.vaultRecordId]);
+    });
+
+    test('labels are unique', () async {
+      final a = await secrets.add(
+        vault,
+        label: 'root',
+        passphrase: bytesOf('FAKE-1'),
+      );
+      await expectLater(
+        secrets.add(vault, label: 'ROOT', passphrase: bytesOf('FAKE-2')),
+        throwsA(isA<DuplicateLabelException>()),
+      );
+      expect(await store.listRecordIds(), [a.vaultRecordId]);
+      final b = await secrets.add(
+        vault,
+        label: 'data',
+        passphrase: bytesOf('FAKE-3'),
+      );
+      await expectLater(
+        secrets.rename(b.id, 'root'),
+        throwsA(isA<DuplicateLabelException>()),
+      );
+      await secrets.rename(a.id, 'Root');
     });
 
     test(

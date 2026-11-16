@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'package:drift/drift.dart' show Value;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:luks_remote_unlocker/data/database.dart';
 import 'package:luks_remote_unlocker/data/drift_vault_store.dart';
@@ -14,6 +15,7 @@ import '../support/harness.dart';
 
 void main() {
   late AppDatabase db;
+  late DriftVaultStore store;
   late Vault vault;
   late HostRepository hosts;
   late KeyRepository keys;
@@ -22,7 +24,8 @@ void main() {
 
   setUp(() async {
     db = memoryDatabase();
-    vault = await Vault.create(DriftVaultStore(db), kdf: fakeKdf);
+    store = DriftVaultStore(db);
+    vault = await Vault.create(store, kdf: fakeKdf);
     await vault.setPassword(bytesOf(fakeMasterPassword), params: fastParams);
     hosts = HostRepository(db);
     keys = KeyRepository(db, hosts);
@@ -71,6 +74,7 @@ void main() {
         keys,
         secrets,
         profiles,
+        store,
       ).prepare(vault, [a, b, c]);
       expect(run.plans.map((p) => p.host.id), ['a', 'b']);
       expect(run.skipped.single.host.id, 'c');
@@ -92,6 +96,56 @@ void main() {
     },
   );
 
+  test('a record of the wrong kind is never used', () async {
+    final key = await keys.add(
+      vault,
+      const SshKeyService().generateEd25519(),
+      label: 'k',
+    );
+    final s = await secrets.add(vault, label: 's', passphrase: bytesOf('FAKE'));
+    final keyAsSecret = await secrets.add(
+      vault,
+      label: 'x',
+      passphrase: bytesOf('FAKE-x'),
+    );
+    await (db.update(db.secrets)..where((r) => r.id.equals(keyAsSecret.id)))
+        .write(SecretsCompanion(vaultRecordId: Value(key.vaultRecordId)));
+    final secretAsKey = await keys.add(
+      vault,
+      const SshKeyService().generateEd25519(),
+      label: 'y',
+    );
+    await (db.update(db.sshKeys)..where((r) => r.id.equals(secretAsKey.id)))
+        .write(SshKeysCompanion(vaultRecordId: Value(s.vaultRecordId)));
+
+    Host host(String id, String keyId, String secretId, [String? disk]) => Host(
+      id: id,
+      name: id,
+      preboot: [Endpoint(id, 2222)],
+      keyId: keyId,
+      secretId: secretId,
+      diskOverrides: {'sdb_crypt': ?disk},
+    );
+
+    final run = await RunPreparation(keys, secrets, profiles, store).prepare(
+      vault,
+      [
+        host('a', key.id, keyAsSecret.id),
+        host('b', secretAsKey.id, s.id),
+        host('c', key.id, s.id, keyAsSecret.id),
+        host('d', key.id, s.id),
+      ],
+    );
+    expect(run.plans.map((p) => p.host.id), ['d']);
+    expect(run.skipped.map((h) => h.host.id), ['a', 'b', 'c']);
+    expect(run.skipped.map((h) => h.reason), [
+      'The vault record of passphrase "x" is missing or of another kind',
+      'The vault record of SSH key "y" is missing or of another kind',
+      'The vault record of passphrase "x" is missing or of another kind',
+    ]);
+    run.wipe();
+  });
+
   test('a locked vault is refused', () async {
     final key = await keys.add(
       vault,
@@ -108,7 +162,7 @@ void main() {
     );
     vault.lock();
     await expectLater(
-      RunPreparation(keys, secrets, profiles).prepare(vault, [host]),
+      RunPreparation(keys, secrets, profiles, store).prepare(vault, [host]),
       throwsA(isA<VaultLockedException>()),
     );
   });

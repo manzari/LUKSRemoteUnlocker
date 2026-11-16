@@ -1,4 +1,7 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
+import 'package:luks_remote_unlocker/providers.dart';
 import 'package:luks_remote_unlocker/vault/vault_controller.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -17,6 +20,30 @@ Future<void> enterNewPassword(
 }
 
 void main() {
+  testWidgets('a vault that cannot be loaded shows a friendly message', (
+    tester,
+  ) async {
+    final app = await pumpApp(
+      tester,
+      setUpVault: false,
+      overrides: [
+        vaultStoreProvider.overrideWithValue(
+          MemoryVaultStore()
+            ..metadataError = const FileSystemException(
+              'FAKE raw detail',
+              '/FAKE/path',
+            ),
+        ),
+      ],
+    );
+    expect(app.status.phase, VaultPhase.failed);
+    expect(
+      find.text('The vault could not be opened. Something went wrong.'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('FAKE'), findsNothing);
+  });
+
   group('first-run setup', () {
     testWidgets(
       'Linux: master password is required, validated, then the shell opens',

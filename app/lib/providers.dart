@@ -117,5 +117,6 @@ final runPreparationProvider = Provider(
     ref.watch(keyRepositoryProvider),
     ref.watch(secretRepositoryProvider),
     ref.watch(profileRepositoryProvider),
+    ref.watch(vaultStoreProvider),
   ),
 );

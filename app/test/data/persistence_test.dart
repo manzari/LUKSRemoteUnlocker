@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:luks_remote_unlocker/data/drift_vault_store.dart';
 import 'package:luks_remote_unlocker/data/host_repository.dart';
 import 'package:luks_remote_unlocker/data/key_repository.dart';
+import 'package:luks_remote_unlocker/data/open_database.dart';
 import 'package:luks_remote_unlocker/data/secret_repository.dart';
 import 'package:unlock_core/unlock_core.dart';
 
@@ -80,4 +81,33 @@ void main() {
       }
     },
   );
+
+  group('file permissions', () {
+    int mode(String path) => FileStat.statSync(path).mode & 0x1ff;
+    final unix = Platform.isLinux || Platform.isMacOS;
+
+    test('a new database gets an owner-only directory and file', () async {
+      final appDir = '${dir.path}/new/app';
+      final db = await openAppDatabase(directory: appDir);
+      await HostRepository(db).all();
+      await db.close();
+      expect(mode(appDir), 0x1c0, reason: '0700');
+      expect(mode('$appDir/$databaseFileName'), 0x180, reason: '0600');
+    }, skip: !unix);
+
+    test('an existing directory, file and siblings are tightened', () async {
+      final appDir = Directory('${dir.path}/old')..createSync();
+      final file = File('${appDir.path}/$databaseFileName')
+        ..writeAsBytesSync(const []);
+      final journal = File('${file.path}-journal')..writeAsBytesSync(const []);
+      Process.runSync('chmod', ['755', appDir.path]);
+      Process.runSync('chmod', ['644', file.path, journal.path]);
+      expect(mode(file.path), 0x1a4, reason: '0644 before');
+
+      restrictDatabaseAccess(appDir.path, file);
+      expect(mode(appDir.path), 0x1c0, reason: '0700');
+      expect(mode(file.path), 0x180, reason: '0600');
+      expect(mode(journal.path), 0x180, reason: '0600');
+    }, skip: !unix);
+  });
 }

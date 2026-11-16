@@ -77,13 +77,22 @@ class _SecretDetailScreenState extends ConsumerState<SecretDetailScreen> {
   }
 
   Future<void> _rename(StoredSecret secret) async {
+    final others = [
+      for (final s in ref.read(secretsProvider).value ?? const <StoredSecret>[])
+        if (s.id != secret.id) s.label,
+    ];
     final label = await askLabel(
       context,
       title: 'Rename passphrase',
       initial: secret.label,
+      taken: others,
     );
     if (label == null) return;
-    await ref.read(secretRepositoryProvider).rename(secret.id, label);
+    try {
+      await ref.read(secretRepositoryProvider).rename(secret.id, label);
+    } on Object catch (e) {
+      if (mounted) showMessage(context, describeError(e));
+    }
   }
 
   Future<void> _delete(StoredSecret secret) async {

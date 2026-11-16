@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 
 import 'providers.dart';
+import 'ui/common/messages.dart';
 import 'ui/shell.dart';
 import 'ui/vault/setup_screen.dart';
 import 'vault/vault_controller.dart';
@@ -75,7 +76,10 @@ class VaultGate extends ConsumerWidget {
         body: Center(
           child: Padding(
             padding: const EdgeInsets.all(24),
-            child: Text('The vault could not be opened: ${status.error}'),
+            child: Text(
+              'The vault could not be opened. '
+              '${describeError(status.error ?? 'unknown')}',
+            ),
           ),
         ),
       ),

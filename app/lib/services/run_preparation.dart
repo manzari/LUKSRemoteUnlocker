@@ -29,13 +29,20 @@ final class PreparedRun {
   }
 }
 
+final class _Skip implements Exception {
+  const _Skip(this.reason);
+
+  final String reason;
+}
+
 /// Turns hosts into engine plans with one unlocked vault; each record is decrypted once.
 final class RunPreparation {
-  RunPreparation(this._keys, this._secrets, this._profiles);
+  RunPreparation(this._keys, this._secrets, this._profiles, this._store);
 
   final KeyRepository _keys;
   final SecretRepository _secrets;
   final ProfileRepository _profiles;
+  final VaultStore _store;
 
   Future<PreparedRun> prepare(Vault vault, List<Host> hosts) async {
     final cache = <String, Uint8List>{};
@@ -43,56 +50,62 @@ final class RunPreparation {
     final skipped = <SkippedHost>[];
     final profiles = {for (final p in await _profiles.all()) p.id: p};
 
-    Future<Uint8List?> secret(String id) async {
-      final stored = await _secrets.get(id);
+    // Checked on every use; the kind is authenticated data, so vault.get fails if it was altered.
+    Future<Uint8List> open(
+      String recordId,
+      VaultRecordKind kind,
+      String what,
+    ) async {
+      final record = await _store.readRecord(recordId);
+      if (record == null || record.kind != kind) {
+        throw _Skip('The vault record of $what is missing or of another kind');
+      }
+      return cache[recordId] ??= await vault.get(recordId);
+    }
+
+    Future<Uint8List?> secret(String? id) async {
+      final stored = id == null ? null : await _secrets.get(id);
       if (stored == null) return null;
-      return cache[stored.vaultRecordId] ??= await vault.get(
+      return open(
         stored.vaultRecordId,
+        VaultRecordKind.passphrase,
+        'passphrase "${stored.label}"',
+      );
+    }
+
+    Future<HostPlan> plan(Host host) async {
+      final keyId = host.keyId;
+      final key = keyId == null ? null : await _keys.get(keyId);
+      if (key == null) throw const _Skip('No SSH key assigned');
+      final passphrase =
+          await secret(host.secretId) ??
+          (throw const _Skip('No passphrase assigned'));
+      final perDisk = <String, Uint8List>{};
+      for (final MapEntry(key: disk, value: id) in host.diskOverrides.entries) {
+        perDisk[disk] =
+            await secret(id) ??
+            (throw _Skip('Passphrase for disk $disk is missing'));
+      }
+      final pem = await open(
+        key.vaultRecordId,
+        VaultRecordKind.sshKey,
+        'SSH key "${key.label}"',
+      );
+      return HostPlan(
+        host: host,
+        privateKeyPem: pem,
+        secrets: DiskPassphrases(passphrase, perDisk: perDisk),
+        profile: profiles[host.profileId] ?? UnlockProfile.debian,
       );
     }
 
     try {
       for (final host in hosts) {
-        final keyId = host.keyId;
-        final secretId = host.secretId;
-        final key = keyId == null ? null : await _keys.get(keyId);
-        if (key == null) {
-          skipped.add(SkippedHost(host, 'No SSH key assigned'));
-          continue;
+        try {
+          plans.add(await plan(host));
+        } on _Skip catch (s) {
+          skipped.add(SkippedHost(host, s.reason));
         }
-        final passphrase = secretId == null ? null : await secret(secretId);
-        if (passphrase == null) {
-          skipped.add(SkippedHost(host, 'No passphrase assigned'));
-          continue;
-        }
-        final perDisk = <String, Uint8List>{};
-        String? missingDisk;
-        for (final MapEntry(key: disk, value: id)
-            in host.diskOverrides.entries) {
-          final bytes = await secret(id);
-          if (bytes == null) {
-            missingDisk = disk;
-            break;
-          }
-          perDisk[disk] = bytes;
-        }
-        if (missingDisk != null) {
-          skipped.add(
-            SkippedHost(host, 'Passphrase for disk $missingDisk is missing'),
-          );
-          continue;
-        }
-        final pem = cache[key.vaultRecordId] ??= await vault.get(
-          key.vaultRecordId,
-        );
-        plans.add(
-          HostPlan(
-            host: host,
-            privateKeyPem: pem,
-            secrets: DiskPassphrases(passphrase, perDisk: perDisk),
-            profile: profiles[host.profileId] ?? UnlockProfile.debian,
-          ),
-        );
       }
     } catch (_) {
       PreparedRun(const [], const [], cache.values.toList()).wipe();

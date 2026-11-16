@@ -63,23 +63,39 @@ Future<Uint8List> fakeKdf(
 }
 
 final class MemorySettings implements VaultSettings {
+  /// The stored allowDeviceCredential flag.
   bool value = false;
+  bool alternate = false;
+
+  /// When set, writes throw it (a crash before the pointer moved).
+  Error? writeError;
 
   @override
-  Future<bool> allowDeviceCredential() async => value;
+  Future<BiometricStoreRef> biometricStore() async =>
+      BiometricStoreRef(allowDeviceCredential: value, alternate: alternate);
 
   @override
-  Future<void> setAllowDeviceCredential(bool v) async => value = v;
+  Future<void> setBiometricStore(BiometricStoreRef ref) async {
+    if (writeError case final e?) throw e;
+    value = ref.allowDeviceCredential;
+    alternate = ref.alternate;
+  }
 }
 
 final class MemoryVaultStore implements ResettableVaultStore {
   InMemoryVaultStore _inner = InMemoryVaultStore();
 
+  /// When set, reading the metadata throws it (an unreadable store).
+  Exception? metadataError;
+
   @override
   Future<void> reset() async => _inner = InMemoryVaultStore();
 
   @override
-  Future<VaultMetadata?> readMetadata() => _inner.readMetadata();
+  Future<VaultMetadata?> readMetadata() async {
+    if (metadataError case final e?) throw e;
+    return _inner.readMetadata();
+  }
 
   @override
   Future<void> writeMetadata(VaultMetadata m) => _inner.writeMetadata(m);
@@ -106,7 +122,7 @@ final class MemoryVaultStore implements ResettableVaultStore {
   Future<void> deleteRecord(String id) => _inner.deleteRecord(id);
 }
 
-/// Biometric slot backed by in-memory key stores, one per fallback option.
+/// Biometric slot backed by in-memory key stores, two per fallback option.
 final class FakeBiometricSlot implements BiometricSlotPlatform {
   FakeBiometricSlot({this.available = true});
 
@@ -115,33 +131,50 @@ final class FakeBiometricSlot implements BiometricSlotPlatform {
   /// When set, writes fail as if the user cancelled the prompt.
   bool cancelWrites = false;
 
+  /// When set, writes throw it (a failed prompt or platform error).
+  Exception? writeError;
+
+  /// Deleting these stores throws a [StateError].
+  final Set<BiometricStoreRef> failingDeletes = {};
+
   /// When set, reads wait for it (a prompt the user has not answered yet).
   Future<void>? readGate;
 
+  /// The primary store per allowDeviceCredential value.
   final Map<bool, InMemoryVaultKeyStore> stores = {
     false: InMemoryVaultKeyStore(),
     true: InMemoryVaultKeyStore(),
   };
 
+  /// The alternate store per allowDeviceCredential value.
+  final Map<bool, InMemoryVaultKeyStore> alternates = {
+    false: InMemoryVaultKeyStore(),
+    true: InMemoryVaultKeyStore(),
+  };
+
+  InMemoryVaultKeyStore storeFor(BiometricStoreRef ref) =>
+      (ref.alternate ? alternates : stores)[ref.allowDeviceCredential]!;
+
   @override
   Future<bool> isAvailable() async => available;
 
   @override
-  VaultKeyStore keyStore({required bool allowDeviceCredential}) =>
-      _FakeKeyStore(this, stores[allowDeviceCredential]!);
+  VaultKeyStore keyStore(BiometricStoreRef ref) =>
+      _FakeKeyStore(this, ref, storeFor(ref));
 
   @override
   Future<void> deleteAll() async {
-    for (final s in stores.values) {
+    for (final s in [...stores.values, ...alternates.values]) {
       await s.delete();
     }
   }
 }
 
 final class _FakeKeyStore implements VaultKeyStore {
-  _FakeKeyStore(this._slot, this._inner);
+  _FakeKeyStore(this._slot, this._ref, this._inner);
 
   final FakeBiometricSlot _slot;
+  final BiometricStoreRef _ref;
   final InMemoryVaultKeyStore _inner;
 
   @override
@@ -157,11 +190,17 @@ final class _FakeKeyStore implements VaultKeyStore {
         VaultKeyUnavailableReason.userCancelled,
       );
     }
+    if (_slot.writeError case final e?) throw e;
     await _inner.write(key);
   }
 
   @override
-  Future<void> delete() => _inner.delete();
+  Future<void> delete() async {
+    if (_slot.failingDeletes.contains(_ref)) {
+      throw StateError('FAKE delete failure');
+    }
+    await _inner.delete();
+  }
 }
 
 final class FakePlatformServices implements PlatformServices {
@@ -208,6 +247,7 @@ Future<TestApp> pumpApp(
   BiometricSlotPlatform biometrics = const NoBiometricSlot(),
   bool setUpVault = true,
   Size size = const Size(1000, 2400),
+  List<Override> overrides = const [],
 }) async {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
@@ -216,7 +256,10 @@ Future<TestApp> pumpApp(
   final services = FakePlatformServices();
   await tester.pumpWidget(
     ProviderScope(
-      overrides: appOverrides(db, biometrics: biometrics, services: services),
+      overrides: [
+        ...appOverrides(db, biometrics: biometrics, services: services),
+        ...overrides,
+      ],
       child: const LuksRemoteUnlockerApp(),
     ),
   );

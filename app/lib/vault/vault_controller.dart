@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -7,6 +8,14 @@ import 'package:unlock_core/vault.dart';
 import '../data/drift_vault_store.dart';
 import '../data/settings_repository.dart';
 import 'biometric_slot.dart';
+
+/// Delay before a wrong password is reported, by the number of consecutive failures.
+typedef PasswordBackoff = Duration Function(int consecutiveFailures);
+
+/// None for the first two failures, then 1 s doubling up to 30 s.
+Duration defaultPasswordBackoff(int failures) => failures < 3
+    ? Duration.zero
+    : Duration(seconds: math.min(30, 1 << math.min(failures - 3, 5)));
 
 /// Everything the vault controller depends on; tests swap in fakes.
 final class VaultDeps {
@@ -17,6 +26,7 @@ final class VaultDeps {
     this.kdf = argon2idInIsolate,
     this.params = Argon2Params.defaults,
     this.autoLockAfter = const Duration(minutes: 2),
+    this.passwordBackoff = defaultPasswordBackoff,
   });
 
   final ResettableVaultStore store;
@@ -25,6 +35,7 @@ final class VaultDeps {
   final PasswordKdf kdf;
   final Argon2Params params;
   final Duration autoLockAfter;
+  final PasswordBackoff passwordBackoff;
 }
 
 enum VaultPhase { loading, needsSetup, locked, unlocked, failed }
@@ -51,7 +62,9 @@ final class VaultStatus {
   /// A biometric read failed because the platform invalidated the slot.
   final bool biometricInvalidated;
   final bool allowDeviceCredential;
-  final String? error;
+
+  /// Why loading failed; shown through describeError, never raw.
+  final Object? error;
 
   bool get isUnlocked => phase == VaultPhase.unlocked;
 
@@ -106,6 +119,11 @@ class VaultController extends Notifier<VaultStatus> {
   Vault? _vault;
   Timer? _idle;
   int _busy = 0;
+  BiometricStoreRef _storeRef = const BiometricStoreRef(
+    allowDeviceCredential: false,
+  );
+  int _passwordFailures = 0;
+  Future<void>? _penalty;
 
   @override
   VaultStatus build() {
@@ -121,18 +139,16 @@ class VaultController extends Notifier<VaultStatus> {
 
   Vault? get unlockedVault => (_vault?.isUnlocked ?? false) ? _vault : null;
 
-  VaultKeyStore get _keyStore => _deps.biometrics.keyStore(
-    allowDeviceCredential: state.allowDeviceCredential,
-  );
+  VaultKeyStore get _keyStore => _deps.biometrics.keyStore(_storeRef);
 
   Future<void> _load() async {
     try {
-      final allow = await _deps.settings.allowDeviceCredential();
+      _storeRef = await _deps.settings.biometricStore();
       final available = await _deps.biometrics.isAvailable();
       final base = VaultStatus(
         phase: VaultPhase.needsSetup,
         biometricAvailable: available,
-        allowDeviceCredential: allow,
+        allowDeviceCredential: _storeRef.allowDeviceCredential,
       );
       if (!await Vault.exists(_deps.store)) {
         _set(base);
@@ -146,7 +162,7 @@ class VaultController extends Notifier<VaultStatus> {
       _vault = vault;
       _set(_fromVault(base.copyWith(phase: VaultPhase.locked)));
     } on Object catch (e) {
-      _set(VaultStatus(phase: VaultPhase.failed, error: '$e'));
+      _set(VaultStatus(phase: VaultPhase.failed, error: e));
     }
   }
 
@@ -167,7 +183,7 @@ class VaultController extends Notifier<VaultStatus> {
         if (await Vault.exists(_deps.store)) await _deps.store.reset();
         final vault = await Vault.create(_deps.store, kdf: _deps.kdf);
         try {
-          if (biometric) await vault.enrollKeyStore(_keyStore);
+          if (biometric) await _enrollInto(vault, _storeRef);
           if (password != null) {
             await vault.setPassword(password, params: _deps.params);
           }
@@ -181,7 +197,8 @@ class VaultController extends Notifier<VaultStatus> {
       });
 
   Future<void> unlockWithPassword(Uint8List password) => _guard(() async {
-    await _requireVault().unlockWithPassword(password);
+    final vault = _requireVault();
+    await _passwordAttempt(() => vault.unlockWithPassword(password));
     _onUnlocked();
   });
 
@@ -198,7 +215,8 @@ class VaultController extends Notifier<VaultStatus> {
 
   /// Opens with the recovery password, then enrolls a new biometric slot.
   Future<void> recover(Uint8List password) => _guard(() async {
-    await _requireVault().unlockWithPassword(password);
+    final vault = _requireVault();
+    await _passwordAttempt(() => vault.unlockWithPassword(password));
     _onUnlocked();
     await enrollBiometrics();
   });
@@ -220,10 +238,25 @@ class VaultController extends Notifier<VaultStatus> {
     if (state.isUnlocked) _restartIdle();
   }
 
-  Future<void> setPassword(Uint8List password) => _guard(() async {
-    await _requireUnlocked().setPassword(password, params: _deps.params);
+  /// Adds the missing password slot; replacing one goes through [changePassword].
+  Future<void> addPassword(Uint8List password) => _guard(() async {
+    final vault = _requireUnlocked();
+    if (vault.hasPasswordSlot) {
+      throw StateError('A password is already set; change it instead');
+    }
+    await vault.setPassword(password, params: _deps.params);
     _set(_fromVault(state));
   });
+
+  /// Needs the current password, which also unlocks a locked vault.
+  Future<void> changePassword(Uint8List current, Uint8List next) =>
+      _guard(() async {
+        final vault = _requireVault();
+        await _passwordAttempt(() => vault.unlockWithPassword(current));
+        _onUnlocked();
+        await vault.changePassword(next, params: _deps.params);
+        _set(_fromVault(state));
+      });
 
   /// Removing needs the biometric slot to prove it still opens the vault.
   Future<void> removePassword() => _guard(() async {
@@ -235,24 +268,29 @@ class VaultController extends Notifier<VaultStatus> {
     _set(_fromVault(state));
   });
 
-  /// Writes the vault key into the biometric slot (new or after invalidation).
+  /// Writes the vault key into the other store; a working current store stays until that succeeded.
   Future<void> enrollBiometrics() => _guard(() async {
-    await _requireUnlocked().enrollKeyStore(_keyStore);
+    final vault = _requireUnlocked();
+    // An invalidated store opens nothing, so it is rewritten in place, which also renews its platform key.
+    final live = vault.biometricSlotEnrolled && !state.biometricInvalidated;
+    await _enrollInto(vault, live ? _storeRef.other : _storeRef);
     _set(_fromVault(state).copyWith(biometricInvalidated: false));
   });
 
-  /// Moves the vault key into the store variant with the other fallback option.
+  /// Moves the vault key into a store with the other fallback option.
   Future<void> setAllowDeviceCredential(bool value) => _guard(() async {
-    if (value == state.allowDeviceCredential) return;
+    if (value == _storeRef.allowDeviceCredential) return;
     final vault = _requireUnlocked();
+    final target = BiometricStoreRef(
+      allowDeviceCredential: value,
+      alternate: _storeRef.alternate,
+    );
     if (vault.biometricSlotEnrolled) {
-      final old = _keyStore;
-      await vault.enrollKeyStore(
-        _deps.biometrics.keyStore(allowDeviceCredential: value),
-      );
-      await old.delete();
+      await _enrollInto(vault, target);
+    } else {
+      await _deps.settings.setBiometricStore(target);
+      _storeRef = target;
     }
-    await _deps.settings.setAllowDeviceCredential(value);
     _set(
       _fromVault(state)
           .copyWith(allowDeviceCredential: value, biometricInvalidated: false),
@@ -263,11 +301,46 @@ class VaultController extends Notifier<VaultStatus> {
   Future<void> reset() => _guard(() async {
     lock();
     _vault = null;
+    _passwordFailures = 0;
     await _deps.store.reset();
     await _deps.biometrics.deleteAll();
     _set(const VaultStatus(phase: VaultPhase.loading));
     await _load();
   });
+
+  /// Write [target], point the settings at it, then drop the old store; [target] must not be a working store.
+  Future<void> _enrollInto(Vault vault, BiometricStoreRef target) async {
+    final previous = _storeRef;
+    final store = _deps.biometrics.keyStore(target);
+    await store.delete();
+    await vault.enrollKeyStore(store);
+    await _deps.settings.setBiometricStore(target);
+    _storeRef = target;
+    if (previous == target) return;
+    try {
+      await _deps.biometrics.keyStore(previous).delete();
+    } on Object {
+      // The new store already works; a leftover is deleted before that store is used again.
+    }
+  }
+
+  /// Consecutive wrong passwords delay the error; later attempts wait for a pending delay first.
+  Future<void> _passwordAttempt(Future<void> Function() check) async {
+    final pending = _penalty;
+    if (pending != null) await pending;
+    try {
+      await check();
+      _passwordFailures = 0;
+    } on VaultWrongPasswordException {
+      final delay = _deps.passwordBackoff(++_passwordFailures);
+      if (delay > Duration.zero) {
+        final penalty = _penalty = Future<void>.delayed(delay);
+        await penalty;
+        if (identical(_penalty, penalty)) _penalty = null;
+      }
+      rethrow;
+    }
+  }
 
   Vault _requireVault() =>
       _vault ?? (throw const VaultNotInitializedException());

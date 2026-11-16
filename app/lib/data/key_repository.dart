@@ -84,6 +84,7 @@ final class KeyRepository {
       _db.sshKeys,
     )..where((k) => k.fingerprint.equals(key.fingerprint))).getSingleOrNull();
     if (existing != null) throw DuplicateKeyException(existing.label);
+    await _requireFreeLabel(label);
     final recordId = await vault.put(VaultRecordKind.sshKey, key.privateKeyPem);
     final row = SshKeysCompanion.insert(
       id: newId(),
@@ -98,10 +99,20 @@ final class KeyRepository {
     return _toKey(await _db.into(_db.sshKeys).insertReturning(row));
   });
 
-  Future<void> rename(String id, String label) async {
+  /// Throws [DuplicateLabelException] when another key has the label.
+  Future<void> rename(String id, String label) => _db.transaction(() async {
+    await _requireFreeLabel(label, except: id);
     await (_db.update(_db.sshKeys)..where((k) => k.id.equals(id))).write(
       SshKeysCompanion(label: Value(label.trim())),
     );
+  });
+
+  Future<void> _requireFreeLabel(String label, {String? except}) async {
+    for (final k in await _db.select(_db.sshKeys).get()) {
+      if (k.id != except && sameLabel(k.label, label)) {
+        throw DuplicateLabelException('A key', label.trim());
+      }
+    }
   }
 
   /// Throws [InUseException] when hosts use the key; deletes its vault record too.

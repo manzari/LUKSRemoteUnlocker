@@ -51,9 +51,13 @@ final class _FakePlugin extends BiometricVault {
     return values[name];
   }
 
+  int deletes = 0;
+
   @override
-  Future<bool?> delete(String name, PromptInfo promptInfo) async =>
-      values.remove(name) != null;
+  Future<bool?> delete(String name, PromptInfo promptInfo) async {
+    deletes++;
+    return values.remove(name) != null;
+  }
 
   @override
   Future<void> write(String name, String content, PromptInfo promptInfo) async {
@@ -61,6 +65,8 @@ final class _FakePlugin extends BiometricVault {
     values[name] = content;
   }
 }
+
+const strict = BiometricStoreRef(allowDeviceCredential: false);
 
 void main() {
   late _FakePlugin plugin;
@@ -87,7 +93,7 @@ void main() {
   });
 
   test('stores the vault key as base64 and reads it back', () async {
-    final store = slot.keyStore(allowDeviceCredential: false);
+    final store = slot.keyStore(strict);
     final key = Uint8List.fromList(List.generate(32, (i) => i));
     await store.write(key);
     final stored = plugin.values['luks_vault_key_biometric']!;
@@ -98,26 +104,65 @@ void main() {
   });
 
   test(
-    'each PIN-fallback option is its own store with matching options',
+    'each PIN-fallback option has two stores with matching options',
     () async {
-      await slot.keyStore(allowDeviceCredential: false).write(Uint8List(32));
-      await slot.keyStore(allowDeviceCredential: true).write(Uint8List(32));
-      final strict = plugin.options['luks_vault_key_biometric']!;
-      expect(strict.androidBiometricOnly, isTrue);
-      expect(strict.darwinBiometricOnly, isTrue);
-      expect(strict.androidAuthenticationValidityDuration, isNull);
-      final lenient = plugin.options['luks_vault_key_with_credential']!;
-      expect(lenient.androidBiometricOnly, isFalse);
-      expect(lenient.darwinBiometricOnly, isFalse);
-      expect(lenient.androidAuthenticationValidityDuration, isNotNull);
+      for (final ref in BiometricStoreRef.all) {
+        await slot.keyStore(ref).write(Uint8List(32));
+      }
+      expect(plugin.values.keys, {
+        'luks_vault_key_biometric',
+        'luks_vault_key_biometric_b',
+        'luks_vault_key_with_credential',
+        'luks_vault_key_with_credential_b',
+      });
+      for (final name in [
+        'luks_vault_key_biometric',
+        'luks_vault_key_biometric_b',
+      ]) {
+        final o = plugin.options[name]!;
+        expect(o.androidBiometricOnly, isTrue);
+        expect(o.darwinBiometricOnly, isTrue);
+        expect(o.androidAuthenticationValidityDuration, isNull);
+      }
+      for (final name in [
+        'luks_vault_key_with_credential',
+        'luks_vault_key_with_credential_b',
+      ]) {
+        final o = plugin.options[name]!;
+        expect(o.androidBiometricOnly, isFalse);
+        expect(o.darwinBiometricOnly, isFalse);
+        expect(o.androidAuthenticationValidityDuration, isNotNull);
+      }
 
       await slot.deleteAll();
       expect(plugin.values, isEmpty);
     },
   );
 
+  test('a write overwrites in place; a cancelled or failed write keeps the '
+      'stored key', () async {
+    final store = slot.keyStore(strict);
+    final old = Uint8List.fromList(List.filled(32, 1));
+    await store.write(old);
+    for (final error in <BiometricVaultException>[
+      const AuthException(AuthExceptionCode.userCanceled, 'x'),
+      const BiometricVaultPluginException('E', 'x', null),
+    ]) {
+      plugin.nextError = error;
+      await expectLater(
+        store.write(Uint8List(32)),
+        throwsA(isA<VaultKeyUnavailableException>()),
+      );
+      expect(await store.read(), old);
+    }
+    expect(plugin.deletes, 0);
+    await store.write(Uint8List(32));
+    expect(await store.read(), Uint8List(32));
+    expect(plugin.deletes, 0);
+  });
+
   test('platform errors map to the core vault exceptions', () async {
-    final store = slot.keyStore(allowDeviceCredential: false);
+    final store = slot.keyStore(strict);
     Future<Object?> readError(BiometricVaultException e) async {
       plugin.nextError = e;
       try {
@@ -164,7 +209,7 @@ void main() {
 
   test('works as the vault biometric slot end to end', () async {
     final vault = await Vault.create(MemoryVaultStore(), kdf: fakeKdf);
-    final store = slot.keyStore(allowDeviceCredential: false);
+    final store = slot.keyStore(strict);
     await vault.enrollKeyStore(store);
     final id = await vault.put(VaultRecordKind.passphrase, bytesOf('FAKE-p'));
     vault.lock();

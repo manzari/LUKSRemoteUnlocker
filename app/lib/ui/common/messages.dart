@@ -26,6 +26,15 @@ String describeError(Object error) => switch (error) {
   _ => 'Something went wrong.',
 };
 
+/// "1 hour", "2 minutes", "90 seconds".
+String describeDuration(Duration d) {
+  final s = d.inSeconds;
+  String count(int n, String unit) => '$n $unit${n == 1 ? '' : 's'}';
+  if (s > 0 && s % 3600 == 0) return count(s ~/ 3600, 'hour');
+  if (s > 0 && s % 60 == 0) return count(s ~/ 60, 'minute');
+  return count(s, 'second');
+}
+
 bool isCancellation(Object error) =>
     error is VaultKeyUnavailableException &&
     error.reason == VaultKeyUnavailableReason.userCancelled;

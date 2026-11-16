@@ -23,13 +23,22 @@ class _KeyDetailScreenState extends ConsumerState<KeyDetailScreen> {
   bool _showQr = false;
 
   Future<void> _rename(StoredKey key) async {
+    final others = [
+      for (final k in ref.read(keysProvider).value ?? const <StoredKey>[])
+        if (k.id != key.id) k.label,
+    ];
     final label = await askLabel(
       context,
       title: 'Rename key',
       initial: key.label,
+      taken: others,
     );
     if (label == null) return;
-    await ref.read(keyRepositoryProvider).rename(key.id, label);
+    try {
+      await ref.read(keyRepositoryProvider).rename(key.id, label);
+    } on Object catch (e) {
+      if (mounted) showMessage(context, describeError(e));
+    }
   }
 
   Future<void> _copy(StoredKey key) async {

@@ -3,9 +3,12 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:luks_remote_unlocker/data/host_repository.dart';
 import 'package:luks_remote_unlocker/data/secret_repository.dart';
+import 'package:luks_remote_unlocker/providers.dart';
+import 'package:luks_remote_unlocker/ui/common/messages.dart';
 import 'package:luks_remote_unlocker/vault/vault_controller.dart';
 import 'package:luks_remote_unlocker/version.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:unlock_core/vault.dart';
 
 import '../support/harness.dart';
 
@@ -19,26 +22,41 @@ void main() {
     expect(version.group(1), startsWith('$appVersion+'));
   });
 
-  testWidgets('change the master password', (tester) async {
+  Future<void> changePassword(
+    WidgetTester tester, {
+    required String current,
+    required String next,
+  }) async {
+    await tester.tap(find.text('Change'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('current-password')),
+      current,
+    );
+    await tester.enterText(find.byKey(const ValueKey('new-password')), next);
+    await tester.enterText(
+      find.byKey(const ValueKey('confirm-password')),
+      next,
+    );
+    await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('change the master password with the current one', (
+    tester,
+  ) async {
     final app = await pumpApp(tester);
     await openTab(tester, 'Settings');
     expect(find.text('Master password'), findsOneWidget);
     expect(find.text('Remove'), findsNothing);
     expect(find.text('Biometric unlock'), findsNothing);
 
-    await tester.tap(find.text('Change'));
-    await tester.pumpAndSettle();
-    await tester.enterText(
-      find.byKey(const ValueKey('new-password')),
-      'FAKE-next-password',
+    await changePassword(
+      tester,
+      current: fakeMasterPassword,
+      next: 'FAKE-next-password',
     );
-    await tester.enterText(
-      find.byKey(const ValueKey('confirm-password')),
-      'FAKE-next-password',
-    );
-    await tester.tap(find.widgetWithText(FilledButton, 'Save'));
-    await tester.pumpAndSettle();
-    expect(find.text('Password saved'), findsOneWidget);
+    expect(find.text('Password changed'), findsOneWidget);
 
     app.vault.lock();
     await tester.pumpAndSettle();
@@ -46,6 +64,126 @@ void main() {
     await tester.pumpAndSettle();
     await unlockViaDialog(tester, password: 'FAKE-next-password');
     expect(app.status.isUnlocked, isTrue);
+  });
+
+  testWidgets('a wrong current password changes nothing, even when unlocked', (
+    tester,
+  ) async {
+    final app = await pumpApp(tester);
+    await openTab(tester, 'Settings');
+    expect(app.status.isUnlocked, isTrue);
+    await changePassword(
+      tester,
+      current: 'FAKE-wrong-password',
+      next: 'FAKE-next-password',
+    );
+    expect(find.text('Wrong password.'), findsOneWidget);
+
+    app.vault.lock();
+    await app.vault.unlockWithPassword(bytesOf(fakeMasterPassword));
+    expect(app.status.isUnlocked, isTrue);
+  });
+
+  testWidgets('the current password alone is enough while locked', (
+    tester,
+  ) async {
+    final app = await pumpApp(tester);
+    await openTab(tester, 'Settings');
+    app.vault.lock();
+    await tester.pumpAndSettle();
+    await changePassword(
+      tester,
+      current: fakeMasterPassword,
+      next: 'FAKE-next-password',
+    );
+    expect(find.text('Unlock the vault'), findsNothing);
+    expect(find.text('Password changed'), findsOneWidget);
+    expect(app.status.isUnlocked, isTrue);
+  });
+
+  testWidgets('adding a recovery password needs fresh biometric auth', (
+    tester,
+  ) async {
+    final slot = FakeBiometricSlot();
+    final app = await pumpApp(tester, biometrics: slot, setUpVault: false);
+    await app.vault.setUp(password: null, biometric: true);
+    await tester.pumpAndSettle();
+    await openTab(tester, 'Settings');
+    expect(app.status.isUnlocked, isTrue);
+    final store = slot.stores[false]!;
+
+    store.unavailable = VaultKeyUnavailableReason.userCancelled;
+    await tester.tap(find.text('Add'));
+    await tester.pumpAndSettle();
+    expect(find.text('Unlock the vault'), findsOneWidget);
+    expect(store.readCount, 1);
+    await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('new-password')), findsNothing);
+    expect(app.status.isUnlocked, isFalse);
+
+    store.unavailable = null;
+    await tester.tap(find.text('Add'));
+    await tester.pumpAndSettle();
+    expect(store.readCount, 2);
+    await tester.enterText(
+      find.byKey(const ValueKey('new-password')),
+      fakeMasterPassword,
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('confirm-password')),
+      fakeMasterPassword,
+    );
+    await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+    await tester.pumpAndSettle();
+    expect(find.text('Password saved'), findsOneWidget);
+    expect(app.status.hasPasswordSlot, isTrue);
+  });
+
+  testWidgets('a cancelled re-enrolment keeps biometric unlock working', (
+    tester,
+  ) async {
+    final slot = FakeBiometricSlot();
+    final app = await pumpApp(tester, biometrics: slot, setUpVault: false);
+    await app.vault.setUp(password: null, biometric: true);
+    await tester.pumpAndSettle();
+    await openTab(tester, 'Settings');
+
+    slot.cancelWrites = true;
+    await tester.tap(find.text('Re-enroll'));
+    await tester.pumpAndSettle();
+    expect(find.text('Biometric unlock set up'), findsNothing);
+    expect(app.status.biometricEnrolled, isTrue);
+
+    app.vault.lock();
+    await app.vault.unlockWithBiometrics();
+    expect(app.status.isUnlocked, isTrue);
+  });
+
+  testWidgets('the auto-lock text follows the configured delay', (
+    tester,
+  ) async {
+    await pumpApp(
+      tester,
+      overrides: [
+        autoLockAfterProvider.overrideWithValue(const Duration(minutes: 5)),
+      ],
+    );
+    await openTab(tester, 'Settings');
+    expect(
+      find.text(
+        'Locks when the app goes to the background or after 5 minutes '
+        'without input',
+      ),
+      findsOneWidget,
+    );
+  });
+
+  test('durations read naturally', () {
+    expect(describeDuration(const Duration(minutes: 2)), '2 minutes');
+    expect(describeDuration(const Duration(minutes: 1)), '1 minute');
+    expect(describeDuration(const Duration(seconds: 90)), '90 seconds');
+    expect(describeDuration(const Duration(hours: 1)), '1 hour');
   });
 
   testWidgets('biometric section: PIN fallback switch and removing recovery', (

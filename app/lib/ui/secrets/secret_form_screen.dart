@@ -3,6 +3,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../data/secret_repository.dart';
 import '../../providers.dart';
+import '../common/label_dialog.dart';
 import '../common/messages.dart';
 import '../common/password_fields.dart';
 import '../vault/unlock.dart';
@@ -71,57 +72,61 @@ class _SecretFormScreenState extends ConsumerState<SecretFormScreen> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(
-      title: Text(
-        _replace ? 'Replace "${widget.replacing!.label}"' : 'Add passphrase',
+  Widget build(BuildContext context) {
+    final taken =
+        ref.watch(secretsProvider).value?.map((s) => s.label).toList() ??
+        const <String>[];
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(
+          _replace ? 'Replace "${widget.replacing!.label}"' : 'Add passphrase',
+        ),
       ),
-    ),
-    body: Form(
-      key: _form,
-      child: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          const Text(
-            'Stored and sent exactly as typed, including spaces, without a '
-            'trailing newline. It is never copied to the clipboard.',
-          ),
-          const SizedBox(height: 16),
-          if (!_replace) ...[
-            TextFormField(
-              key: const ValueKey('secret-label'),
-              controller: _label,
-              decoration: const InputDecoration(labelText: 'Label'),
-              validator: (v) =>
-                  (v ?? '').trim().isEmpty ? 'Enter a label' : null,
+      body: Form(
+        key: _form,
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            const Text(
+              'Stored and sent exactly as typed, including spaces, without a '
+              'trailing newline. It is never copied to the clipboard.',
             ),
-            const SizedBox(height: 12),
-          ],
-          NewPasswordFields(
-            password: _passphrase,
-            confirmation: _confirmation,
-            label: _replace ? 'New passphrase' : 'Passphrase',
-            minLength: 1,
-            enabled: !_busy,
-          ),
-          const SizedBox(height: 24),
-          FilledButton(
-            onPressed: _busy ? null : _save,
-            child: Text(_replace ? 'Replace' : 'Save'),
-          ),
-          if (_busy) ...[
             const SizedBox(height: 16),
-            const LinearProgressIndicator(),
-          ],
-          if (_error case final e?) ...[
-            const SizedBox(height: 16),
-            Text(
-              e,
-              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            if (!_replace) ...[
+              TextFormField(
+                key: const ValueKey('secret-label'),
+                controller: _label,
+                decoration: const InputDecoration(labelText: 'Label'),
+                validator: (v) => validateLabel(v, taken),
+              ),
+              const SizedBox(height: 12),
+            ],
+            NewPasswordFields(
+              password: _passphrase,
+              confirmation: _confirmation,
+              label: _replace ? 'New passphrase' : 'Passphrase',
+              minLength: 1,
+              enabled: !_busy,
             ),
+            const SizedBox(height: 24),
+            FilledButton(
+              onPressed: _busy ? null : _save,
+              child: Text(_replace ? 'Replace' : 'Save'),
+            ),
+            if (_busy) ...[
+              const SizedBox(height: 16),
+              const LinearProgressIndicator(),
+            ],
+            if (_error case final e?) ...[
+              const SizedBox(height: 16),
+              Text(
+                e,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+            ],
           ],
-        ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 }

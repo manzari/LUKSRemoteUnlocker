@@ -11,16 +11,20 @@ import 'package:unlock_core/vault.dart';
 import '../support/harness.dart';
 
 final class _Env {
-  _Env({BiometricSlotPlatform? biometrics, MemoryVaultStore? store})
-    : biometrics = biometrics ?? const NoBiometricSlot(),
-      store = store ?? MemoryVaultStore() {
+  _Env({
+    BiometricSlotPlatform? biometrics,
+    MemoryVaultStore? store,
+    MemorySettings? settings,
+  }) : biometrics = biometrics ?? const NoBiometricSlot(),
+       store = store ?? MemoryVaultStore(),
+       settings = settings ?? MemorySettings() {
     container = ProviderContainer(
       overrides: [
         vaultDepsProvider.overrideWithValue(
           VaultDeps(
             store: this.store,
             biometrics: this.biometrics,
-            settings: settings,
+            settings: this.settings,
             kdf: fakeKdf,
             params: fastParams,
           ),
@@ -32,7 +36,7 @@ final class _Env {
 
   final BiometricSlotPlatform biometrics;
   final MemoryVaultStore store;
-  final settings = MemorySettings();
+  final MemorySettings settings;
   late final ProviderContainer container;
 
   VaultController get vault => container.read(vaultControllerProvider.notifier);
@@ -59,8 +63,9 @@ void main() {
   Future<_Env> env({
     BiometricSlotPlatform? biometrics,
     MemoryVaultStore? store,
+    MemorySettings? settings,
   }) async {
-    final e = _Env(biometrics: biometrics, store: store);
+    final e = _Env(biometrics: biometrics, store: store, settings: settings);
     envs.add(e);
     await e.loaded();
     return e;
@@ -126,13 +131,23 @@ void main() {
       expect(e.status.phase, VaultPhase.unlocked);
     });
 
-    test('change password', () async {
+    test('change password needs the current one', () async {
       final e = await env();
       await e.vault.setUp(
         password: bytesOf(fakeMasterPassword),
         biometric: false,
       );
-      await e.vault.setPassword(bytesOf('FAKE-new-master-password'));
+      await expectLater(
+        e.vault.changePassword(
+          bytesOf('FAKE-wrong-password'),
+          bytesOf('FAKE-new-master-password'),
+        ),
+        throwsA(isA<VaultWrongPasswordException>()),
+      );
+      await e.vault.changePassword(
+        bytesOf(fakeMasterPassword),
+        bytesOf('FAKE-new-master-password'),
+      );
       e.vault.lock();
       await expectLater(
         e.vault.unlockWithPassword(bytesOf(fakeMasterPassword)),
@@ -140,6 +155,110 @@ void main() {
       );
       await e.vault.unlockWithPassword(bytesOf('FAKE-new-master-password'));
       expect(e.status.isUnlocked, isTrue);
+    });
+
+    test('change password works from a locked vault and unlocks it', () async {
+      final e = await env();
+      await e.vault.setUp(
+        password: bytesOf(fakeMasterPassword),
+        biometric: false,
+      );
+      e.vault.lock();
+      await e.vault.changePassword(
+        bytesOf(fakeMasterPassword),
+        bytesOf('FAKE-new-master-password'),
+      );
+      expect(e.status.isUnlocked, isTrue);
+      e.vault.lock();
+      await e.vault.unlockWithPassword(bytesOf('FAKE-new-master-password'));
+    });
+
+    test('adding a password never replaces an existing one', () async {
+      final e = await env();
+      await e.vault.setUp(
+        password: bytesOf(fakeMasterPassword),
+        biometric: false,
+      );
+      await expectLater(
+        e.vault.addPassword(bytesOf('FAKE-new-master-password')),
+        throwsStateError,
+      );
+      e.vault.lock();
+      await e.vault.unlockWithPassword(bytesOf(fakeMasterPassword));
+    });
+
+    test('the load error is kept as an object, not as text', () async {
+      final e = await env(
+        store: MemoryVaultStore()
+          ..metadataError = const VaultCorruptException('FAKE unreadable'),
+      );
+      expect(e.status.phase, VaultPhase.failed);
+      expect(e.status.error, isA<VaultCorruptException>());
+    });
+  });
+
+  group('wrong-password backoff', () {
+    test('delays from the third consecutive failure, resets on success', () {
+      fakeAsync((async) {
+        final e = _Env();
+        envs.add(e);
+        async.flushMicrotasks();
+        unawaited(
+          e.vault.setUp(
+            password: bytesOf(fakeMasterPassword),
+            biometric: false,
+          ),
+        );
+        async.flushMicrotasks();
+        e.vault.lock();
+
+        Object? outcome;
+        void attempt(String password) {
+          outcome = null;
+          unawaited(
+            e.vault
+                .unlockWithPassword(bytesOf(password))
+                .then<void>(
+                  (_) => outcome = 'ok',
+                  onError: (Object error) => outcome = error,
+                ),
+          );
+          async.flushMicrotasks();
+        }
+
+        final wrong = isA<VaultWrongPasswordException>();
+        attempt('FAKE-wrong-1');
+        expect(outcome, wrong);
+        attempt('FAKE-wrong-2');
+        expect(outcome, wrong);
+        attempt('FAKE-wrong-3');
+        expect(outcome, isNull);
+        async.elapse(const Duration(milliseconds: 999));
+        expect(outcome, isNull);
+        async.elapse(const Duration(milliseconds: 1));
+        expect(outcome, wrong);
+        attempt('FAKE-wrong-4');
+        async.elapse(const Duration(milliseconds: 1999));
+        expect(outcome, isNull);
+        async.elapse(const Duration(milliseconds: 1));
+        expect(outcome, wrong);
+
+        attempt(fakeMasterPassword);
+        expect(outcome, 'ok');
+        expect(e.status.isUnlocked, isTrue);
+        e.vault.lock();
+        attempt('FAKE-wrong-5');
+        expect(outcome, wrong);
+      });
+    });
+
+    test('the schedule grows and is capped', () {
+      expect(defaultPasswordBackoff(1), Duration.zero);
+      expect(defaultPasswordBackoff(2), Duration.zero);
+      expect(defaultPasswordBackoff(3), const Duration(seconds: 1));
+      expect(defaultPasswordBackoff(5), const Duration(seconds: 4));
+      expect(defaultPasswordBackoff(8), const Duration(seconds: 30));
+      expect(defaultPasswordBackoff(1000), const Duration(seconds: 30));
     });
   });
 
@@ -166,8 +285,106 @@ void main() {
       await e.vault.setUp(password: null, biometric: true);
       expect(e.status.hasPasswordSlot, isFalse);
       expect(e.status.biometricEnrolled, isTrue);
-      await e.vault.setPassword(bytesOf(fakeMasterPassword));
+      await e.vault.addPassword(bytesOf(fakeMasterPassword));
       expect(e.status.hasPasswordSlot, isTrue);
+    });
+
+    group('re-enrolment keeps the only slot until the new one is written', () {
+      Future<_Env> biometricOnly() async {
+        final e = await env(biometrics: FakeBiometricSlot());
+        await e.vault.setUp(password: null, biometric: true);
+        return e;
+      }
+
+      Future<void> expectOldSlotStillOpens(_Env e) async {
+        expect(e.status.biometricEnrolled, isTrue);
+        expect(e.fake.stores[false]!.hasKey, isTrue);
+        expect(e.settings.alternate, isFalse);
+        e.vault.lock();
+        await e.vault.unlockWithBiometrics();
+        expect(e.status.isUnlocked, isTrue);
+        final restarted = await env(
+          biometrics: e.biometrics,
+          store: e.store,
+          settings: e.settings,
+        );
+        await restarted.vault.unlockWithBiometrics();
+        expect(restarted.status.isUnlocked, isTrue);
+      }
+
+      test('cancelled prompt', () async {
+        final e = await biometricOnly();
+        e.fake.cancelWrites = true;
+        await expectLater(
+          e.vault.enrollBiometrics(),
+          throwsA(isA<VaultKeyUnavailableException>()),
+        );
+        e.fake.cancelWrites = false;
+        await expectOldSlotStillOpens(e);
+      });
+
+      test('failed write', () async {
+        final e = await biometricOnly();
+        e.fake.writeError = VaultKeyUnavailableException(
+          VaultKeyUnavailableReason.unavailable,
+        );
+        await expectLater(
+          e.vault.enrollBiometrics(),
+          throwsA(isA<VaultKeyUnavailableException>()),
+        );
+        e.fake.writeError = null;
+        await expectOldSlotStillOpens(e);
+      });
+
+      test('crash after the write, before the settings moved', () async {
+        final e = await biometricOnly();
+        e.settings.writeError = StateError('FAKE crash');
+        await expectLater(e.vault.enrollBiometrics(), throwsStateError);
+        e.settings.writeError = null;
+        await expectOldSlotStillOpens(e);
+      });
+
+      test('success moves to the other store and drops the old one', () async {
+        final e = await biometricOnly();
+        await e.vault.enrollBiometrics();
+        expect(e.settings.alternate, isTrue);
+        expect(e.fake.alternates[false]!.hasKey, isTrue);
+        expect(e.fake.stores[false]!.hasKey, isFalse);
+
+        final restarted = await env(
+          biometrics: e.biometrics,
+          store: e.store,
+          settings: e.settings,
+        );
+        await restarted.vault.unlockWithBiometrics();
+        expect(restarted.status.isUnlocked, isTrue);
+
+        await restarted.vault.enrollBiometrics();
+        expect(e.settings.alternate, isFalse);
+        expect(e.fake.stores[false]!.hasKey, isTrue);
+        expect(e.fake.alternates[false]!.hasKey, isFalse);
+      });
+
+      test('an old store that cannot be deleted is left behind, then cleared '
+          'before reuse', () async {
+        final e = await biometricOnly();
+        const primary = BiometricStoreRef(allowDeviceCredential: false);
+        e.fake.failingDeletes.add(primary);
+        await e.vault.enrollBiometrics();
+        expect(e.settings.alternate, isTrue);
+        expect(e.fake.stores[false]!.hasKey, isTrue);
+
+        await expectLater(e.vault.enrollBiometrics(), throwsStateError);
+        expect(e.settings.alternate, isTrue);
+        e.vault.lock();
+        await e.vault.unlockWithBiometrics();
+        expect(e.fake.alternates[false]!.readCount, 1);
+
+        e.fake.failingDeletes.clear();
+        await e.vault.enrollBiometrics();
+        expect(e.settings.alternate, isFalse);
+        expect(e.fake.alternates[false]!.hasKey, isFalse);
+      });
     });
 
     test('a cancelled enrollment leaves no half-made vault', () async {
@@ -209,6 +426,8 @@ void main() {
         await e.vault.recover(bytesOf(fakeMasterPassword));
         expect(e.status.isUnlocked, isTrue);
         expect(e.status.biometricInvalidated, isFalse);
+        expect(e.settings.alternate, isFalse, reason: 'dead store rewritten');
+        expect(e.fake.alternates[false]!.hasKey, isFalse);
 
         e.vault.lock();
         await e.vault.unlockWithBiometrics();
@@ -250,6 +469,50 @@ void main() {
       expect(e.fake.stores[false]!.hasKey, isTrue);
       expect(e.fake.stores[true]!.hasKey, isFalse);
     });
+
+    test(
+      'PIN fallback switch: every failure point leaves a working slot',
+      () async {
+        final e = await env(biometrics: FakeBiometricSlot());
+        await e.vault.setUp(password: null, biometric: true);
+
+        e.fake.cancelWrites = true;
+        await expectLater(
+          e.vault.setAllowDeviceCredential(true),
+          throwsA(isA<VaultKeyUnavailableException>()),
+        );
+        e.fake.cancelWrites = false;
+        expect(e.status.allowDeviceCredential, isFalse);
+        expect(e.settings.value, isFalse);
+        expect(e.fake.stores[false]!.hasKey, isTrue);
+
+        e.settings.writeError = StateError('FAKE crash');
+        await expectLater(
+          e.vault.setAllowDeviceCredential(true),
+          throwsStateError,
+        );
+        e.settings.writeError = null;
+        expect(e.settings.value, isFalse);
+        expect(e.fake.stores[false]!.hasKey, isTrue);
+        final restarted = await env(
+          biometrics: e.biometrics,
+          store: e.store,
+          settings: e.settings,
+        );
+        await restarted.vault.unlockWithBiometrics();
+        expect(restarted.status.allowDeviceCredential, isFalse);
+
+        e.fake.failingDeletes.add(
+          const BiometricStoreRef(allowDeviceCredential: false),
+        );
+        await e.vault.setAllowDeviceCredential(true);
+        expect(e.status.allowDeviceCredential, isTrue);
+        expect(e.settings.value, isTrue);
+        e.vault.lock();
+        await e.vault.unlockWithBiometrics();
+        expect(e.fake.stores[true]!.readCount, 1);
+      },
+    );
 
     test('removing the recovery password needs the biometric slot', () async {
       final e = await env(biometrics: FakeBiometricSlot());

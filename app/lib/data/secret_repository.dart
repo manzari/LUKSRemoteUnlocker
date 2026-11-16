@@ -62,6 +62,7 @@ final class SecretRepository {
     required String label,
     required Uint8List passphrase,
   }) => _db.transaction(() async {
+    await _requireFreeLabel(label);
     final recordId = await vault.put(VaultRecordKind.passphrase, passphrase);
     final now = DateTime.now();
     final row = await _db
@@ -87,10 +88,20 @@ final class SecretRepository {
         );
       });
 
-  Future<void> rename(String id, String label) async {
+  /// Throws [DuplicateLabelException] when another passphrase has the label.
+  Future<void> rename(String id, String label) => _db.transaction(() async {
+    await _requireFreeLabel(label, except: id);
     await (_db.update(_db.secrets)..where((s) => s.id.equals(id))).write(
       SecretsCompanion(label: Value(label.trim())),
     );
+  });
+
+  Future<void> _requireFreeLabel(String label, {String? except}) async {
+    for (final s in await _db.select(_db.secrets).get()) {
+      if (s.id != except && sameLabel(s.label, label)) {
+        throw DuplicateLabelException('A passphrase', label.trim());
+      }
+    }
   }
 
   /// Throws [InUseException] when hosts use the secret; deletes its vault record too.

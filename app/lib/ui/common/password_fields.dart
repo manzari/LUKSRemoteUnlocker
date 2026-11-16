@@ -62,20 +62,43 @@ class NewPasswordFields extends StatelessWidget {
   );
 }
 
+typedef _Entered = ({Uint8List? current, Uint8List next});
+
+/// The caller zeroes both buffers when done.
+typedef PasswordChange = ({Uint8List current, Uint8List next});
+
 Future<Uint8List?> askNewPassword(
   BuildContext context, {
   required String title,
   String? message,
-}) => showDialog<Uint8List>(
+}) async => (await showDialog<_Entered>(
   context: context,
   builder: (_) => _NewPasswordDialog(title: title, message: message),
-);
+))?.next;
+
+/// Asks for the current password together with the new one.
+Future<PasswordChange?> askPasswordChange(
+  BuildContext context, {
+  required String title,
+}) async {
+  final entered = await showDialog<_Entered>(
+    context: context,
+    builder: (_) => _NewPasswordDialog(title: title, askCurrent: true),
+  );
+  if (entered == null) return null;
+  return (current: entered.current!, next: entered.next);
+}
 
 class _NewPasswordDialog extends StatefulWidget {
-  const _NewPasswordDialog({required this.title, this.message});
+  const _NewPasswordDialog({
+    required this.title,
+    this.message,
+    this.askCurrent = false,
+  });
 
   final String title;
   final String? message;
+  final bool askCurrent;
 
   @override
   State<_NewPasswordDialog> createState() => _NewPasswordDialogState();
@@ -83,26 +106,30 @@ class _NewPasswordDialog extends StatefulWidget {
 
 class _NewPasswordDialogState extends State<_NewPasswordDialog> {
   final _form = GlobalKey<FormState>();
+  final _current = TextEditingController();
   final _password = TextEditingController();
   final _confirmation = TextEditingController();
 
   @override
   void dispose() {
-    _password
-      ..clear()
-      ..dispose();
-    _confirmation
-      ..clear()
-      ..dispose();
+    for (final c in [_current, _password, _confirmation]) {
+      c
+        ..clear()
+        ..dispose();
+    }
     super.dispose();
   }
 
   void _submit() {
     if (!_form.currentState!.validate()) return;
-    final bytes = textBytes(_password);
+    final entered = (
+      current: widget.askCurrent ? textBytes(_current) : null,
+      next: textBytes(_password),
+    );
+    _current.clear();
     _password.clear();
     _confirmation.clear();
-    Navigator.pop(context, bytes);
+    Navigator.pop(context, entered);
   }
 
   @override
@@ -119,7 +146,27 @@ class _NewPasswordDialogState extends State<_NewPasswordDialog> {
               Text(m),
               const SizedBox(height: 12),
             ],
-            NewPasswordFields(password: _password, confirmation: _confirmation),
+            if (widget.askCurrent) ...[
+              TextFormField(
+                key: const ValueKey('current-password'),
+                controller: _current,
+                obscureText: true,
+                enableSuggestions: false,
+                autocorrect: false,
+                autofocus: true,
+                decoration: const InputDecoration(
+                  labelText: 'Current password',
+                ),
+                validator: (v) =>
+                    (v ?? '').isEmpty ? 'Enter the current password' : null,
+              ),
+              const SizedBox(height: 12),
+            ],
+            NewPasswordFields(
+              password: _password,
+              confirmation: _confirmation,
+              label: widget.askCurrent ? 'New password' : 'Password',
+            ),
           ],
         ),
       ),

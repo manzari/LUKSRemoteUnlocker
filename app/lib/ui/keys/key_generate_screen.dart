@@ -3,6 +3,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:unlock_core/keys.dart';
 
 import '../../providers.dart';
+import '../common/label_dialog.dart';
 import '../common/messages.dart';
 import '../vault/unlock.dart';
 import 'key_detail_screen.dart';
@@ -61,51 +62,56 @@ class _KeyGenerateScreenState extends ConsumerState<KeyGenerateScreen> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Generate key')),
-    body: Form(
-      key: _form,
-      child: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          const Text(
-            'Creates a new Ed25519 key. Only the public key can be shown, '
-            'copied or shared; add it to the server\'s authorized_keys.',
-          ),
-          const SizedBox(height: 16),
-          TextFormField(
-            key: const ValueKey('key-label'),
-            controller: _label,
-            decoration: const InputDecoration(labelText: 'Label'),
-            validator: (v) => (v ?? '').trim().isEmpty ? 'Enter a label' : null,
-          ),
-          const SizedBox(height: 12),
-          TextFormField(
-            key: const ValueKey('key-comment'),
-            controller: _comment,
-            decoration: const InputDecoration(
-              labelText: 'Comment',
-              helperText: 'Appended to the public key line',
+  Widget build(BuildContext context) {
+    final taken =
+        ref.watch(keysProvider).value?.map((k) => k.label).toList() ??
+        const <String>[];
+    return Scaffold(
+      appBar: AppBar(title: const Text('Generate key')),
+      body: Form(
+        key: _form,
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            const Text(
+              'Creates a new Ed25519 key. Only the public key can be shown, '
+              'copied or shared; add it to the server\'s authorized_keys.',
             ),
-          ),
-          const SizedBox(height: 24),
-          FilledButton(
-            onPressed: _busy ? null : _generate,
-            child: const Text('Generate'),
-          ),
-          if (_busy) ...[
             const SizedBox(height: 16),
-            const LinearProgressIndicator(),
-          ],
-          if (_error case final e?) ...[
-            const SizedBox(height: 16),
-            Text(
-              e,
-              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            TextFormField(
+              key: const ValueKey('key-label'),
+              controller: _label,
+              decoration: const InputDecoration(labelText: 'Label'),
+              validator: (v) => validateLabel(v, taken),
             ),
+            const SizedBox(height: 12),
+            TextFormField(
+              key: const ValueKey('key-comment'),
+              controller: _comment,
+              decoration: const InputDecoration(
+                labelText: 'Comment',
+                helperText: 'Appended to the public key line',
+              ),
+            ),
+            const SizedBox(height: 24),
+            FilledButton(
+              onPressed: _busy ? null : _generate,
+              child: const Text('Generate'),
+            ),
+            if (_busy) ...[
+              const SizedBox(height: 16),
+              const LinearProgressIndicator(),
+            ],
+            if (_error case final e?) ...[
+              const SizedBox(height: 16),
+              Text(
+                e,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+            ],
           ],
-        ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 }

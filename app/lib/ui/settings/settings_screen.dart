@@ -35,6 +35,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   Future<void> _run(Future<void> Function() action, {String? done}) async {
     final vault = await requireVault(context, ref);
     if (vault == null || !mounted) return;
+    await _busyRun(action, done: done);
+  }
+
+  Future<void> _busyRun(Future<void> Function() action, {String? done}) async {
     setState(() => _busy = true);
     try {
       await action();
@@ -46,22 +50,45 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
   }
 
-  Future<void> _setPassword({required String title, String? message}) async {
-    final vault = await requireVault(context, ref);
+  /// The only other slot is biometric, so adding needs a fresh biometric check.
+  Future<void> _addPassword() async {
+    final vault = await requireVault(
+      context,
+      ref,
+      fresh: true,
+      reason: 'Confirm it is you before adding a recovery password.',
+    );
     if (vault == null || !mounted) return;
     final Uint8List? password = await askNewPassword(
       context,
-      title: title,
-      message: message,
+      title: 'Add recovery password',
+      message: 'Opens the vault when biometric unlock stops working.',
     );
     if (password == null) return;
     try {
-      await _run(
-        () => _controller.setPassword(password),
+      if (!mounted) return;
+      await _busyRun(
+        () => _controller.addPassword(password),
         done: 'Password saved',
       );
     } finally {
       password.fillRange(0, password.length, 0);
+    }
+  }
+
+  /// The current password is the authentication; no unlock needed first.
+  Future<void> _changePassword(String title) async {
+    final change = await askPasswordChange(context, title: title);
+    if (change == null) return;
+    try {
+      if (!mounted) return;
+      await _busyRun(
+        () => _controller.changePassword(change.current, change.next),
+        done: 'Password changed',
+      );
+    } finally {
+      change.current.fillRange(0, change.current.length, 0);
+      change.next.fillRange(0, change.next.length, 0);
     }
   }
 
@@ -113,9 +140,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 status.isUnlocked ? Icons.lock_open : Icons.lock_outline,
               ),
               title: Text(status.isUnlocked ? 'Unlocked' : 'Locked'),
-              subtitle: const Text(
-                'Locks when the app goes to the background or after 2 '
-                'minutes without input',
+              subtitle: Text(
+                'Locks when the app goes to the background or after '
+                '${describeDuration(ref.watch(autoLockAfterProvider))} '
+                'without input',
               ),
               trailing: status.isUnlocked
                   ? TextButton(
@@ -177,19 +205,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 children: [
                   if (status.hasPasswordSlot)
                     TextButton(
-                      onPressed: () => _setPassword(
-                        title: 'Change ${passwordName.toLowerCase()}',
+                      onPressed: () => _changePassword(
+                        'Change ${passwordName.toLowerCase()}',
                       ),
                       child: const Text('Change'),
                     )
                   else
                     TextButton(
-                      onPressed: () => _setPassword(
-                        title: 'Add recovery password',
-                        message:
-                            'Opens the vault when biometric unlock stops '
-                            'working.',
-                      ),
+                      onPressed: _addPassword,
                       child: const Text('Add'),
                     ),
                   if (status.hasPasswordSlot && status.biometricEnrolled)

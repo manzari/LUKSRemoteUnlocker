@@ -4,13 +4,50 @@ import 'package:biometric_vault/biometric_vault.dart';
 import 'package:flutter/foundation.dart';
 import 'package:unlock_core/vault.dart';
 
+/// Names one biometric store. Each fallback option has two stores, so a new key is written before the old one goes.
+@immutable
+final class BiometricStoreRef {
+  const BiometricStoreRef({
+    required this.allowDeviceCredential,
+    this.alternate = false,
+  });
+
+  final bool allowDeviceCredential;
+  final bool alternate;
+
+  static const List<BiometricStoreRef> all = [
+    BiometricStoreRef(allowDeviceCredential: false),
+    BiometricStoreRef(allowDeviceCredential: false, alternate: true),
+    BiometricStoreRef(allowDeviceCredential: true),
+    BiometricStoreRef(allowDeviceCredential: true, alternate: true),
+  ];
+
+  /// The other store with the same fallback option.
+  BiometricStoreRef get other => BiometricStoreRef(
+    allowDeviceCredential: allowDeviceCredential,
+    alternate: !alternate,
+  );
+
+  @override
+  bool operator ==(Object other) =>
+      other is BiometricStoreRef &&
+      other.allowDeviceCredential == allowDeviceCredential &&
+      other.alternate == alternate;
+
+  @override
+  int get hashCode => Object.hash(allowDeviceCredential, alternate);
+
+  @override
+  String toString() =>
+      'BiometricStoreRef(credential: $allowDeviceCredential, alternate: $alternate)';
+}
+
 /// Where the biometric vault slot lives on this platform.
 abstract interface class BiometricSlotPlatform {
   /// Whether a biometric slot can be offered right now (hardware present and enrolled).
   Future<bool> isAvailable();
 
-  /// The key store for the given fallback option; each option is its own store.
-  VaultKeyStore keyStore({required bool allowDeviceCredential});
+  VaultKeyStore keyStore(BiometricStoreRef ref);
 
   Future<void> deleteAll();
 }
@@ -23,7 +60,7 @@ final class NoBiometricSlot implements BiometricSlotPlatform {
   Future<bool> isAvailable() async => false;
 
   @override
-  VaultKeyStore keyStore({required bool allowDeviceCredential}) =>
+  VaultKeyStore keyStore(BiometricStoreRef ref) =>
       throw UnsupportedError('No biometric slot on this platform');
 
   @override
@@ -35,7 +72,7 @@ final class BiometricVaultSlot implements BiometricSlotPlatform {
   BiometricVaultSlot([this._plugin]);
 
   final BiometricVault? _plugin;
-  final Map<bool, BiometricVaultKeyStore> _stores = {};
+  final Map<BiometricStoreRef, BiometricVaultKeyStore> _stores = {};
 
   BiometricVault get _vault => _plugin ?? BiometricVault();
 
@@ -55,34 +92,34 @@ final class BiometricVaultSlot implements BiometricSlotPlatform {
   }
 
   @override
-  VaultKeyStore keyStore({required bool allowDeviceCredential}) =>
-      _stores[allowDeviceCredential] ??= BiometricVaultKeyStore(
-        _vault,
-        allowDeviceCredential: allowDeviceCredential,
-      );
+  VaultKeyStore keyStore(BiometricStoreRef ref) =>
+      _stores[ref] ??= BiometricVaultKeyStore(_vault, ref);
 
   @override
   Future<void> deleteAll() async {
     if (!_supported) return;
-    for (final allow in [false, true]) {
-      await keyStore(allowDeviceCredential: allow).delete();
+    for (final ref in BiometricStoreRef.all) {
+      await keyStore(ref).delete();
     }
   }
 }
 
 /// [VaultKeyStore] holding the vault key as base64 in one biometric_vault store.
 final class BiometricVaultKeyStore implements VaultKeyStore {
-  BiometricVaultKeyStore(this._plugin, {required this.allowDeviceCredential});
+  BiometricVaultKeyStore(this._plugin, this.ref);
 
   final BiometricVault _plugin;
-  final bool allowDeviceCredential;
+  final BiometricStoreRef ref;
   BiometricVaultFile? _file;
 
-  String get storeName => allowDeviceCredential
-      ? 'luks_vault_key_with_credential'
-      : 'luks_vault_key_biometric';
+  String get storeName {
+    final base = ref.allowDeviceCredential
+        ? 'luks_vault_key_with_credential'
+        : 'luks_vault_key_biometric';
+    return ref.alternate ? '${base}_b' : base;
+  }
 
-  StorageFileInitOptions get options => allowDeviceCredential
+  StorageFileInitOptions get options => ref.allowDeviceCredential
       ? const StorageFileInitOptions(
           androidBiometricOnly: false,
           androidAuthenticationValidityDuration: Duration(seconds: 10),
@@ -115,13 +152,10 @@ final class BiometricVaultKeyStore implements VaultKeyStore {
     }
   });
 
-  /// Deletes first, so a store invalidated by a new enrollment gets a fresh platform key.
+  /// Overwrites in place; the plugin keeps the previous value when the prompt is cancelled or fails.
   @override
-  Future<void> write(Uint8List key) => _mapped(() async {
-    final file = await _open();
-    await file.delete();
-    await file.write(base64.encode(key));
-  });
+  Future<void> write(Uint8List key) =>
+      _mapped(() async => (await _open()).write(base64.encode(key)));
 
   @override
   Future<void> delete() => _mapped(() async => (await _open()).delete());

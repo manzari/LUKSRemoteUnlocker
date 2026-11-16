@@ -25,6 +25,15 @@ final class DuplicateKeyException extends DataException {
   final String existingLabel;
 }
 
+final class DuplicateLabelException extends DataException {
+  DuplicateLabelException(String what, String label)
+    : super('$what labelled "$label" already exists. Choose another label.');
+}
+
+/// Labels compare trimmed and case-insensitively, like the label validators.
+bool sameLabel(String a, String b) =>
+    a.trim().toLowerCase() == b.trim().toLowerCase();
+
 final class ReadOnlyProfileException extends DataException {
   const ReadOnlyProfileException()
     : super('Built-in profiles are read-only. Copy it to make changes.');

@@ -1,8 +1,22 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
+
+// Release signing from android/key.properties (git-ignored): storeFile, storePassword, keyAlias, keyPassword.
+val keystorePropertiesFile = rootProject.file("key.properties")
+val keystoreProperties = Properties().apply {
+    if (keystorePropertiesFile.exists()) {
+        keystorePropertiesFile.inputStream().use { load(it) }
+    }
+}
+
+fun keystoreProperty(name: String): String =
+    keystoreProperties.getProperty(name)?.takeIf { it.isNotBlank() }
+        ?: throw GradleException("$name is missing in ${keystorePropertiesFile.path}")
 
 android {
     namespace = "cc.b0t.luksremoteunlocker"
@@ -28,11 +42,32 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        if (keystorePropertiesFile.exists()) {
+            create("release") {
+                // Relative paths resolve against android/app.
+                storeFile = file(keystoreProperty("storeFile"))
+                storePassword = keystoreProperty("storePassword")
+                keyAlias = keystoreProperty("keyAlias")
+                keyPassword = keystoreProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (keystorePropertiesFile.exists()) {
+                signingConfigs.getByName("release")
+            } else {
+                if (gradle.startParameter.taskNames.any { it.contains("release", ignoreCase = true) }) {
+                    // Quiet level, because `flutter build` runs Gradle with -q, which hides warn.
+                    logger.quiet(
+                        "WARNING: ${keystorePropertiesFile.path} not found; the release build is " +
+                            "signed with the DEBUG key. Do not publish it.",
+                    )
+                }
+                signingConfigs.getByName("debug")
+            }
         }
     }
 }

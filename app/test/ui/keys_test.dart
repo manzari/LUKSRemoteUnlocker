@@ -77,6 +77,46 @@ void main() {
     },
   );
 
+  testWidgets('a key label already in use is refused in the form and on '
+      'rename', (tester) async {
+    final app = await pumpApp(tester);
+    final repo = KeyRepository(app.db, HostRepository(app.db));
+    await repo.add(
+      app.vault.unlockedVault!,
+      const SshKeyService().generateEd25519(),
+      label: 'Laptop',
+    );
+    await openAdd(tester, 'Generate Ed25519 key');
+    await tester.enterText(find.byKey(const ValueKey('key-label')), 'laptop ');
+    await tester.tap(find.widgetWithText(FilledButton, 'Generate'));
+    await tester.pumpAndSettle();
+    expect(find.text('This label is already used'), findsOneWidget);
+    expect(await repo.all(), hasLength(1));
+
+    await tester.enterText(find.byKey(const ValueKey('key-label')), 'phone');
+    await tester.tap(find.widgetWithText(FilledButton, 'Generate'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Rename'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('label-dialog-field')),
+      'LAPTOP',
+    );
+    await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+    await tester.pumpAndSettle();
+    expect(find.text('This label is already used'), findsOneWidget);
+    await tester.enterText(
+      find.byKey(const ValueKey('label-dialog-field')),
+      'Phone',
+    );
+    await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+    await tester.pumpAndSettle();
+    expect(
+      (await repo.all()).map((k) => k.label),
+      containsAll(['Laptop', 'Phone']),
+    );
+  });
+
   testWidgets('import shows the core errors as readable messages', (
     tester,
   ) async {
