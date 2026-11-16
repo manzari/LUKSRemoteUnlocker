@@ -8,10 +8,10 @@ environment:
   sdk: ^3.14.0
 
 dependencies:
-  collection: ^1.19.0
+  collection: ^1.19.1
   cryptography: ^2.9.0
   dartssh2: ^4.1.0
-  meta: ^1.16.0
+  meta: ^1.19.0
   pinenacl: ^0.6.0
 
 dev_dependencies:
