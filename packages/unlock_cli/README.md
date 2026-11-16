@@ -26,13 +26,13 @@ luks-unlock secret add --label L [--secret-fd N] | list | rm LABEL
 | `--vault PATH` | Vault for `key:`, `secret:` and `disk_secrets:` labels (default below). |
 | `--password-fd N` | Read the vault password from file descriptor `N`, byte for byte. |
 
-**Passphrase.** One passphrase serves every selected host that has neither `passphrase_file` nor `secret`. It is read from stdin: on a terminal with a `Passphrase:` prompt and echo off, up to Enter; from a pipe up to end of file, with exactly one trailing newline removed. With `--passphrase-fd` the bytes are used exactly as read. `passphrase_file` and `disk_passphrase_files` are read like a pipe (one trailing newline removed). Passphrases are sent as these exact bytes, never logged, and overwritten when the run ends.
+**Passphrase.** One passphrase serves every selected host that has neither `passphrase_file` nor `secret`. It is read from stdin: on a terminal with a `Passphrase:` prompt and echo off, up to Enter; from a pipe up to end of file, with exactly one trailing newline removed. With `--passphrase-fd` the bytes are used exactly as read. `passphrase_file` and `disk_passphrase_files` are read like a pipe (one trailing newline removed). These files and `key_file` must not be accessible to group or others (`chmod 600`), or the run is refused with exit status 64. Passphrases are sent as these exact bytes, never logged, and overwritten when the run ends.
 
 **Vault.** If any selected host uses a label, the vault is unlocked once before the run: one `Vault password:` prompt on the terminal, or `--password-fd`. Labels are checked before the prompt. Only the records the selected hosts use are decrypted, the vault key is dropped right after, and the decrypted keys and passphrases are overwritten when the run ends. Hosts with labels and hosts with files or stdin can be mixed in one run; the stdin passphrase is read after the vault password. When stdin is not a terminal (for example the passphrase is piped in), the vault password must come from `--password-fd`.
 
-**Output.** One line per event, `[host] state: message`, where `state` is the phase (`checking-if-up`, `waiting-for-preboot`, `verifying-host-key`, `authenticating`, `unlocking`, `waiting-for-boot`) or, on the last line of a host, its result. Server output appears as `stdout: ...` / `stderr: ...` with any passphrase replaced by `[redacted]`. A summary table follows, then hints for keys to pin.
+**Output.** One line per event, `[host] state: message`, where `state` is the phase (`checking-if-up`, `waiting-for-preboot`, `verifying-host-key`, `authenticating`, `unlocking`, `waiting-for-boot`) or, on the last line of a host, its result. Server output appears as `stdout: ...` / `stderr: ...` with any passphrase replaced by `[redacted]` and control characters shown as `\xNN`. A summary table follows, then hints for keys to pin.
 
-**Exit status.** `0` if every selected host ended `Unlocked` or `Already up`; `1` otherwise (also after Ctrl-C, which cancels all hosts, a wrong vault password, or a damaged vault); `64` for usage errors, an unreadable or invalid config, a missing key file, an empty passphrase, a label that is not in the vault, or no vault at all.
+**Exit status.** `0` if every selected host ended `Unlocked` or `Already up`; `1` otherwise (also after Ctrl-C, which cancels all hosts, a wrong vault password, or a damaged vault); `64` for usage errors, an unreadable or invalid config, a missing key file, an empty passphrase, a label that is not in the vault, or no vault at all; `130` after Ctrl-C at a password or passphrase prompt.
 
 **Unpinned host keys.** Without `--accept-new-host-key`, a host with no `preboot_host_key` is refused before login and ends as `Host key mismatch` with the message `pre-boot host key is not pinned; server presented ...`. The hint at the end shows the line to add after you checked the key on the server (`dropbearkey -y -f /etc/dropbear/initramfs/dropbear_ed25519_host_key`).
 
@@ -75,14 +75,14 @@ When the type is given in `preboot_host_key`, only that host-key type is offered
 
 ## Vault
 
-The vault keeps SSH private keys and LUKS passphrases encrypted (XChaCha20-Poly1305 under a random vault key, which is wrapped by an Argon2id key from the master password: 19 MiB, 2 passes, 1 lane). It is meant for headless Linux use.
+The vault keeps SSH private keys and LUKS passphrases encrypted (XChaCha20-Poly1305 under a random vault key, which is wrapped by an Argon2id key from the master password: 64 MiB, 3 passes, 1 lane; vaults created earlier keep their own parameters). It is meant for headless Linux use.
 
 **Location.** `--vault PATH`, else `$LUKS_UNLOCK_VAULT`, else `$XDG_DATA_HOME/luks-remote-unlocker/vault.json`, else `~/.local/share/luks-remote-unlocker/vault.json`. Next to `NAME.json` live:
 
 | File | Content |
 | --- | --- |
 | `NAME.json` | The vault: metadata, password slot, encrypted records (mode 0600). |
-| `NAME.index.json` | Labels: for each key its label, record id, type, public line and fingerprint; for each secret its label and record id. No secrets (mode 0600). |
+| `NAME.index.json` | Labels: for each key and secret its label and record id. No secrets (mode 0600). The label is also sealed inside each record and checked on every use, so an index changed outside `luks-unlock` is rejected. |
 | `NAME.lock` | Empty; writers hold a lock on it so two commands do not overwrite each other. |
 
 A new directory is created with mode 0700. Every file is replaced atomically (temp file and rename). A record is written before its label, and a label is removed before its record, so an interruption can at worst leave an unlabelled record, which `vault status` reports.
@@ -96,18 +96,18 @@ A new directory is created with mode 0700. Every file is replaced atomically (te
 | `vault passwd [--password-fd N] [--new-password-fd M]` | current, new | Re-wraps the vault key under a new password; records stay as they are. |
 | `key generate --label L [--comment C]` | yes | New Ed25519 key. Prints the public line (comment defaults to the label) and the `SHA256:` fingerprint, one per line. Add the public line to the server's `authorized_keys`. |
 | `key import --label L FILE [--key-passphrase-fd N]` | yes | Imports an OpenSSH (Ed25519, RSA, ECDSA), PKCS#1 RSA or SEC1 EC private key. An encrypted key's passphrase is asked on the terminal (`Key passphrase:`) or read from `--key-passphrase-fd`. Prints public line and fingerprint. |
-| `key list` | no | Table of label, type and fingerprint. |
-| `key show LABEL` | no | Public line and fingerprint. |
+| `key list` | yes | Table of label, type and fingerprint, computed from the decrypted keys. |
+| `key show LABEL` | yes | Public line and fingerprint, computed from the decrypted key. |
 | `key rm LABEL` | yes | Deletes label and record. |
 | `secret add --label L [--secret-fd N]` | yes | Stores a LUKS passphrase, typed twice after the vault password, or read from `--secret-fd` byte for byte. |
-| `secret list` | no | Labels, one per line. |
+| `secret list` | no | Labels, one per line, as the index has them (not verified). |
 | `secret rm LABEL` | yes | Deletes label and record. |
 
 Every command takes `--vault PATH`; those that need the password take `--password-fd N`. No command prints a private key or passphrase.
 
 Labels are 1 to 64 letters, digits and `._@+-`, starting with a letter or digit. Keys and secrets have separate labels, so a key and a secret may both be called `nas`. Whether a label is still used by some config is not checked.
 
-**Exit status.** `0` on success; `1` when the operation fails (no vault, a vault already exists, wrong vault or key passphrase, unusable key file, duplicate or unknown label, damaged vault or index, I/O error); `64` for usage errors (bad options or arguments, unreadable `FILE` or file descriptor, no terminal, empty, short or mismatched new password or passphrase).
+**Exit status.** `0` on success; `1` when the operation fails (no vault, a vault already exists, wrong vault or key passphrase, unusable key file, duplicate or unknown label, damaged vault or index, I/O error); `64` for usage errors (bad options or arguments, unreadable `FILE` or file descriptor, no terminal, empty, short or mismatched new password or passphrase); `130` after Ctrl-C at a prompt.
 
 ## Against the test bench
 

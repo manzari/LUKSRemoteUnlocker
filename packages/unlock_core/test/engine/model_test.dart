@@ -88,6 +88,23 @@ void main() {
     );
   });
 
+  test('Host.copyWith clears group and post-boot host on request', () {
+    final h = Host(
+      id: 'x',
+      name: 'x',
+      group: 'home',
+      preboot: [const Endpoint('a', 2222)],
+      postbootHost: 'b',
+    );
+    expect(h.copyWith(name: 'y').group, 'home');
+    expect(h.copyWith(name: 'y').postbootHost, 'b');
+    final cleared = h.copyWith(clearGroup: true, clearPostbootHost: true);
+    expect(cleared.group, isNull);
+    expect(cleared.postbootHost, isNull);
+    expect(cleared.postboot, const Endpoint('a', 22));
+    expect(h.copyWith(clearGroup: true, group: 'ignored').group, isNull);
+  });
+
   test('UnlockProfile round-trips; Debian is the stdin built-in', () {
     expect(UnlockProfile.debian.driver, UnlockDriverKind.stdin);
     expect(UnlockProfile.debian.command, 'cryptroot-unlock');

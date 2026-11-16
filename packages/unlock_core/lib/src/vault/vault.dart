@@ -255,28 +255,12 @@ final class Vault {
   }
 
   /// Returns a fresh plaintext buffer; the caller should zero it when done.
-  Future<Uint8List> get(String id) async {
-    final key = _keyCopy();
-    try {
-      final record = await _readRecord(id);
-      final plaintext = await openBox(
-        key,
-        record.nonce,
-        record.ciphertext,
-        _recordAad(record.kind, id),
-      );
-      if (plaintext == null) {
-        throw VaultCorruptException('record $id failed authentication');
-      }
-      return plaintext;
-    } finally {
-      zeroBytes(key);
-    }
-  }
+  Future<Uint8List> get(String id) async => (await _openRecord(id)).$2;
 
+  /// Keeps the record's kind, which must first authenticate; a tampered record is not overwritten.
   Future<void> replace(String id, Uint8List plaintext) async {
-    _requireKey();
-    final record = await _readRecord(id);
+    final (record, old) = await _openRecord(id);
+    zeroBytes(old);
     await _sealRecord(id, record.kind, plaintext);
   }
 
@@ -356,6 +340,25 @@ final class Vault {
       throw VaultCorruptException('malformed record $id');
     }
     return record;
+  }
+
+  Future<(VaultRecord, Uint8List)> _openRecord(String id) async {
+    final key = _keyCopy();
+    try {
+      final record = await _readRecord(id);
+      final plaintext = await openBox(
+        key,
+        record.nonce,
+        record.ciphertext,
+        _recordAad(record.kind, id),
+      );
+      if (plaintext == null) {
+        throw VaultCorruptException('record $id failed authentication');
+      }
+      return (record, plaintext);
+    } finally {
+      zeroBytes(key);
+    }
   }
 
   Future<void> _sealRecord(

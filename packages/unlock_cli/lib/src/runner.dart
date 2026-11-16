@@ -169,16 +169,21 @@ final class _Unlock {
       return e.code;
     } on ConfigException catch (e) {
       _wipe();
-      err.writeln('$executableName: $e');
+      err.writeln('$executableName: ${terminalSafe('$e')}');
       return exitUsage;
     } on VaultException catch (e) {
       _wipe();
-      err.writeln('$executableName: vault: ${e.message}');
+      err.writeln('$executableName: vault: ${terminalSafe(e.message)}');
       return exitFailure;
     } on FileSystemException catch (e) {
       _wipe();
-      err.writeln('$executableName: ${e.path ?? e.message}: ${osMessage(e)}');
+      err.writeln(
+        '$executableName: ${terminalSafe('${e.path ?? e.message}: ${osMessage(e)}')}',
+      );
       return exitFailure;
+    } catch (_) {
+      _wipe();
+      rethrow;
     }
     try {
       return await _run(plans);
@@ -206,7 +211,7 @@ final class _Unlock {
     final fd = fdOption(args, 'passphrase-fd', _help);
     final passwordFd = fdOption(args, 'password-fd', _help);
 
-    final config = CliConfig.load(path);
+    final config = CliConfig.load(path, environment: vaults.environment);
     final selected = <CliHost>[];
     if (names.isNotEmpty) {
       for (final n in names) {
@@ -265,7 +270,7 @@ final class _Unlock {
     Uint8List? shared;
     if (selected.any((h) => h.usesStdin)) {
       try {
-        shared = _keep(reader.read(fd: fd, prompt: err));
+        shared = _keep(await reader.read(fd: fd, prompt: err));
       } on FileSystemException catch (e) {
         throw CliExit.usage('cannot read the passphrase: ${osMessage(e)}');
       }
@@ -293,8 +298,15 @@ final class _Unlock {
     ];
   }
 
+  /// Refuses a file that group or others may read, as ssh does for private keys.
   Uint8List _readFile(String path, String what) {
     try {
+      if (openToOthers(path) case final mode?) {
+        throw ConfigException(
+          '$what $path is accessible by group or others (mode $mode); '
+          'restrict it with chmod 600',
+        );
+      }
       return _keep(File(path).readAsBytesSync());
     } on FileSystemException catch (e) {
       throw ConfigException('$what $path: ${osMessage(e)}');
@@ -343,19 +355,22 @@ final class _Unlock {
       sigint = null;
     }
     try {
+      // Messages and key types come from the servers.
       await for (final e in engine.run(plans)) {
         final name = names[e.hostId]!;
         final state = e.result?.label ?? e.phase.id;
-        out.writeln('[$name] $state: ${e.message}');
+        out.writeln('[$name] $state: ${terminalSafe(e.message)}');
         if (e.isFinal) finals[e.hostId] = e;
         if (e.newPrebootKey case final k?) {
           hints.add(
-            '$name: accepted pre-boot key; pin it with  preboot_host_key: "$k"',
+            '$name: accepted pre-boot key; pin it with  '
+            'preboot_host_key: "${terminalSafe('$k')}"',
           );
         }
         if (e.newPostbootKey case final k?) {
           hints.add(
-            '$name: post-boot key seen; record it with  postboot_host_key: "$k"',
+            '$name: post-boot key seen; record it with  '
+            'postboot_host_key: "${terminalSafe('$k')}"',
           );
         }
         if (e.isFinal &&
@@ -364,7 +379,8 @@ final class _Unlock {
                 null) {
           hints.add(
             '$name: pre-boot key is not pinned; after checking it on the server, add  '
-            'preboot_host_key: "${e.presentedKey}"  or run with --accept-new-host-key',
+            'preboot_host_key: "${terminalSafe('${e.presentedKey}')}"  '
+            'or run with --accept-new-host-key',
           );
         }
       }
@@ -388,7 +404,7 @@ final class _Unlock {
       final state = e?.result ?? FinalState.error;
       ok = ok && state.isSuccess;
       out.writeln(
-        '${p.host.name.padRight(nameWidth)}  ${state.label.padRight(stateWidth)}  ${e?.message ?? ''}',
+        '${p.host.name.padRight(nameWidth)}  ${state.label.padRight(stateWidth)}  ${terminalSafe(e?.message ?? '')}',
       );
     }
     if (hints.isNotEmpty) {
@@ -408,7 +424,9 @@ final class _AcceptPrompt implements HostKeyPrompt {
 
   @override
   Future<bool> confirm(Host host, HostKey key) async {
-    err.writeln('[${host.name}] accepting new pre-boot host key $key');
+    err.writeln(
+      '[${host.name}] accepting new pre-boot host key ${terminalSafe('$key')}',
+    );
     return true;
   }
 }

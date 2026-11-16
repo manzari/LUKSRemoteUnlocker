@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:test/test.dart';
@@ -236,6 +237,34 @@ void main() {
       },
     );
 
+    for (final (name, breakChannel) in <(String, void Function(FakeExec))>[
+      ('write throws', (e) => e.writeError = StateError('channel is closed')),
+      ('closing stdin throws', (e) => e.closeStdinError = Exception('gone')),
+      (
+        'closing stdin throws an SSH failure',
+        (e) => e.closeStdinError = const SshConnectionLost('closed'),
+      ),
+    ]) {
+      test('$name after the prompt: lost after the passphrase', () async {
+        final w = World();
+        w.server.overrides[0] = (e) async {
+          breakChannel(e);
+          e.out('Please unlock disk sda3_crypt\n');
+          w.server.unlocked.add('sda3_crypt');
+          w.server.bootedAt = e.clock.now().add(const Duration(seconds: 20));
+          w.server.dropbearStopped = true;
+          e.connection.closed = true;
+        };
+        final events = await runAll(w.engine(), [w.plan(w.host())]);
+        expect(
+          events.map((e) => e.message),
+          contains(startsWith('connection lost after the passphrase')),
+        );
+        expect(resultOf(events), FinalState.unlocked, reason: messages(events));
+        expect(messages(events), isNot(contains('unexpected error')));
+      });
+    }
+
     test('no result 30 s after the passphrase counts as lost', () async {
       final w = World();
       w.server.overrides[0] = (e) async {
@@ -456,6 +485,57 @@ void main() {
       );
       expect(resultOf(events, 'h0'), FinalState.cancelled);
       expect(resultOf(events, 'h1'), FinalState.unlocked);
+    });
+
+    test('before listening: every host ends Cancelled, nothing runs', () async {
+      final w = World(servers: 2);
+      final engine = w.engine();
+      final stream = engine.run([
+        w.plan(w.host(index: 0)),
+        w.plan(w.host(index: 1)),
+      ]);
+      expect(engine.hasActiveRuns, isTrue);
+      engine.cancel();
+      final events = await stream.toList();
+      expect(events, hasLength(2));
+      expect(resultOf(events, 'h0'), FinalState.cancelled);
+      expect(resultOf(events, 'h1'), FinalState.cancelled);
+      expect(w.reach.calls, isEmpty);
+      expect(w.ssh.connectedTo, isEmpty);
+      expect(engine.hasActiveRuns, isFalse);
+    });
+
+    test('cancelling the subscription stops every host', () async {
+      final w = World(servers: 2);
+      for (final s in w.servers) {
+        s.absent = true;
+      }
+      final engine = w.engine();
+      final waiting = Completer<void>();
+      final sub = engine
+          .run([w.plan(w.host(index: 0)), w.plan(w.host(index: 1))])
+          .listen((e) {
+            if (e.phase == HostPhase.waitingForPreboot &&
+                !waiting.isCompleted) {
+              waiting.complete();
+            }
+          });
+      await waiting.future;
+      await sub.cancel();
+      expect(engine.hasActiveRuns, isFalse);
+      final polls = w.reach.calls.length;
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(w.reach.calls, hasLength(polls));
+      expect(w.clock.elapsed, lessThan(const Duration(seconds: 5)));
+    });
+
+    test('a finished run leaves no state behind', () async {
+      final w = World();
+      final engine = w.engine();
+      final stream = engine.run([w.plan(w.host())]);
+      expect(engine.hasActiveRuns, isTrue);
+      await stream.toList();
+      expect(engine.hasActiveRuns, isFalse);
     });
   });
 }

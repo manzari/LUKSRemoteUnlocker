@@ -90,6 +90,33 @@ void main() {
       expect(await vault.get(id), bytesOf('FAKE-replacement-key'));
     });
 
+    test('replace refuses a record whose kind was relabelled', () async {
+      final id = await vault.put(VaultRecordKind.sshKey, fakeSshKey());
+      await tamper(id, kind: VaultRecordKind.passphrase);
+      final tampered = (await store.readRecord(id))!;
+      await expectLater(
+        vault.replace(id, fakePassphrase()),
+        throwsA(corruptButNotWrongPassword()),
+      );
+      final after = (await store.readRecord(id))!;
+      expect(after.nonce, tampered.nonce);
+      expect(after.ciphertext, tampered.ciphertext);
+      await tamper(id, kind: VaultRecordKind.sshKey);
+      expect(await vault.get(id), fakeSshKey());
+    });
+
+    test('replace refuses a record that fails authentication', () async {
+      final id = await vault.put(VaultRecordKind.passphrase, fakePassphrase());
+      await tamper(
+        id,
+        ciphertext: flipBit((await store.readRecord(id))!.ciphertext),
+      );
+      await expectLater(
+        vault.replace(id, bytesOf('FAKE-new')),
+        throwsA(corruptButNotWrongPassword()),
+      );
+    });
+
     test('delete removes the record', () async {
       final id = await vault.put(VaultRecordKind.passphrase, fakePassphrase());
       expect(await vault.recordIds(), [id]);

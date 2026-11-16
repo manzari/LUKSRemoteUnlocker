@@ -2,11 +2,12 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'private_files.dart';
 import 'vault_exceptions.dart';
 import 'vault_models.dart';
 import 'vault_store.dart';
 
-/// [VaultStore] in one JSON file (mode 0600); each write replaces it atomically via temp file + rename.
+/// [VaultStore] in one JSON file (mode 0600); each write replaces it atomically via temp file, rename and directory fsync.
 final class FileVaultStore implements VaultStore {
   FileVaultStore._(this.path, this._state, this._onBeforeRename);
 
@@ -75,37 +76,25 @@ final class FileVaultStore implements VaultStore {
   Future<void> _persist(_FileState state) async {
     final bytes = utf8.encode(jsonEncode(state.toJson()));
     final temp = File(tempPath);
-    await _ensureDirectory(temp.parent);
+    final dir = temp.parent;
     try {
-      if (temp.existsSync()) {
-        await temp.delete();
-      }
-      await temp.create(exclusive: true);
-      await _chmod('600', temp.path);
+      // Sync calls only: the umask must still be in force when the file is created.
+      withOwnerOnlyUmask(() {
+        if (!dir.existsSync()) {
+          dir.createSync(recursive: true);
+        }
+        if (temp.existsSync()) {
+          temp.deleteSync();
+        }
+        temp.createSync(exclusive: true);
+      });
       await temp.writeAsBytes(bytes, flush: true);
       await _onBeforeRename?.call();
       await temp.rename(path);
+      syncDirectory(dir.path);
     } catch (_) {
       await _deleteQuietly(temp);
       rethrow;
-    }
-  }
-
-  static Future<void> _ensureDirectory(Directory dir) async {
-    if (dir.existsSync()) {
-      return;
-    }
-    await dir.create(recursive: true);
-    await _chmod('700', dir.path);
-  }
-
-  static Future<void> _chmod(String mode, String target) async {
-    if (Platform.isWindows) {
-      return;
-    }
-    final result = await Process.run('chmod', [mode, '--', target]);
-    if (result.exitCode != 0) {
-      throw FileSystemException('chmod $mode failed', target);
     }
   }
 

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -24,7 +25,7 @@ final class CliExit implements Exception {
   final String? helpFor;
 
   void report(StringSink err) {
-    err.writeln('$executableName: $message');
+    err.writeln('$executableName: ${terminalSafe(message)}');
     if (helpFor != null) {
       err.writeln("Run '$executableName $helpFor --help' for usage.");
     }
@@ -63,3 +64,49 @@ int? fdOption(ArgResults args, String name, String helpFor) {
 }
 
 String osMessage(FileSystemException e) => e.osError?.message ?? e.message;
+
+/// Octal mode of [path] if group or others have any access, as OpenSSH checks private keys; else null.
+String? openToOthers(String path) {
+  if (Platform.isWindows) return null;
+  final stat = FileStat.statSync(path);
+  if (stat.type == FileSystemEntityType.notFound) return null;
+  final mode = stat.mode & 0x1ff;
+  return mode & 0x3f == 0 ? null : mode.toRadixString(8).padLeft(4, '0');
+}
+
+final _unsafe = RegExp(
+  r'[\x00-\x08\x0a-\x1f\x7f-\x9f\u2028\u2029\u202a-\u202e\u2066-\u2069]',
+);
+
+/// Shows control characters as `\xNN` or `\uNNNN` (tab stays), so text from a server cannot drive the terminal.
+String terminalSafe(String text) {
+  if (!_unsafe.hasMatch(text)) return text;
+  return text.replaceAllMapped(_unsafe, (m) {
+    final c = m[0]!.codeUnitAt(0);
+    return c < 0x100
+        ? '\\x${c.toRadixString(16).padLeft(2, '0')}'
+        : '\\u${c.toRadixString(16).padLeft(4, '0')}';
+  });
+}
+
+/// Runs [body]; an unexpected error, also an uncaught asynchronous one, becomes one line on [err] and exit status 1.
+Future<int> runGuarded(Future<int> Function() body, StringSink err) {
+  final result = Completer<int>();
+  runZonedGuarded(
+    () async {
+      final code = await body();
+      if (!result.isCompleted) result.complete(code);
+    },
+    (e, _) {
+      if (result.isCompleted) return;
+      final text = e is FormatException ? 'FormatException: ${e.message}' : '$e';
+      final line = terminalSafe(text);
+      err.writeln(
+        '$executableName: unexpected error: '
+        '${line.length > 500 ? '${line.substring(0, 500)}...' : line}',
+      );
+      result.complete(exitFailure);
+    },
+  );
+  return result.future;
+}

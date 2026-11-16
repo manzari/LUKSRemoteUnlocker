@@ -84,7 +84,8 @@ final class CliConfig {
     'command',
   };
 
-  static CliConfig load(String path) {
+  /// [environment] supplies HOME for `~/` paths (default: the process environment).
+  static CliConfig load(String path, {Map<String, String>? environment}) {
     final file = File(path);
     final String text;
     try {
@@ -92,14 +93,21 @@ final class CliConfig {
     } on FileSystemException catch (e) {
       throw ConfigException('$path: ${e.osError?.message ?? e.message}');
     }
-    return parse(text, baseDir: file.absolute.parent.path, source: path);
+    return parse(
+      text,
+      baseDir: file.absolute.parent.path,
+      source: path,
+      environment: environment,
+    );
   }
 
   static CliConfig parse(
     String text, {
     required String baseDir,
     String source = 'config',
+    Map<String, String>? environment,
   }) {
+    final env = environment ?? Platform.environment;
     final Object? doc;
     try {
       doc = loadYaml(text);
@@ -128,7 +136,7 @@ final class CliConfig {
         if (!own.containsKey('key')) h.remove('key');
         if (!own.containsKey('key_file')) h.remove('key_file');
       }
-      final host = _host(h, where, baseDir);
+      final host = _host(h, where, baseDir, env);
       if (!names.add(host.host.name)) {
         throw ConfigException('$where: duplicate name ${host.host.name}');
       }
@@ -137,12 +145,23 @@ final class CliConfig {
     return CliConfig(hosts);
   }
 
-  static CliHost _host(Map<String, Object?> h, String where, String baseDir) {
-    String? str(String k) {
+  static CliHost _host(
+    Map<String, Object?> h,
+    String where,
+    String baseDir,
+    Map<String, String> env,
+  ) {
+    ConfigException notString(String k, Object v) => ConfigException(
+      '$where: $k must be a string${v is num || v is bool ? ' (quote it)' : ''}',
+    );
+
+    // [number]: a whole number is accepted too, for durations.
+    String? str(String k, {bool number = false}) {
       final v = h[k];
       if (v == null) return null;
-      if (v is String || v is num) return '$v';
-      throw ConfigException('$where: $k must be a string');
+      if (v is String) return v;
+      if (number && v is int) return '$v';
+      throw notString(k, v);
     }
 
     bool flag(String k, bool def) {
@@ -151,9 +170,17 @@ final class CliConfig {
       return v;
     }
 
-    T parsed<T>(String k, T Function(String) parse) {
+    T parsed<T>(String k, T Function(String) parse, {bool number = false}) {
       try {
-        return parse(str(k)!);
+        return parse(str(k, number: number)!);
+      } on FormatException catch (e) {
+        throw ConfigException('$where: $k: ${e.message} (${e.source})');
+      }
+    }
+
+    String path(String k, String p) {
+      try {
+        return resolvePath(p, baseDir, environment: env);
       } on FormatException catch (e) {
         throw ConfigException('$where: $k: ${e.message} (${e.source})');
       }
@@ -191,11 +218,19 @@ final class CliConfig {
     final pre = h['preboot'];
     final preList = pre is List ? pre : <Object?>[?pre];
     if (preList.isEmpty) throw ConfigException('$at: preboot is required');
-    final List<Endpoint> preboot;
-    try {
-      preboot = [for (final e in preList) Endpoint.parse('$e')];
-    } on FormatException catch (e) {
-      throw ConfigException('$at: preboot: ${e.message} (${e.source})');
+    final preboot = <Endpoint>[];
+    for (final e in preList) {
+      if (e is! String) {
+        throw ConfigException(
+          '$at: preboot: ${e == null ? 'empty entry' : '$e is not a string'}; '
+          'use host or host:port',
+        );
+      }
+      try {
+        preboot.add(Endpoint.parse(e));
+      } on FormatException catch (f) {
+        throw ConfigException('$at: preboot: ${f.message} (${f.source})');
+      }
     }
     final post = h['postboot'] == null
         ? null
@@ -204,7 +239,19 @@ final class CliConfig {
       final v = h[k];
       if (v == null) return const {};
       if (v is! Map) throw ConfigException('$at: $k must be a map');
-      return {for (final e in v.entries) '${e.key}': '${e.value}'};
+      final out = <String, String>{};
+      for (final MapEntry(:key, :value) in v.entries) {
+        if (key is! String) {
+          throw ConfigException('$at: $k: disk name $key must be a string');
+        }
+        if (value is! String) {
+          throw ConfigException(
+            '$at: $k: $key must be a string, not ${value ?? 'empty'}',
+          );
+        }
+        out[key] = value;
+      }
+      return out;
     }
 
     final diskFiles = disks('disk_passphrase_files');
@@ -234,10 +281,10 @@ final class CliConfig {
           : parsed('postboot_check', PostBootCheck.fromId),
       waitTimeout: h['wait_timeout'] == null
           ? const Duration(minutes: 10)
-          : parsed('wait_timeout', parseDuration),
+          : parsed('wait_timeout', parseDuration, number: true),
       bootTimeout: h['boot_timeout'] == null
           ? const Duration(minutes: 5)
-          : parsed('boot_timeout', parseDuration),
+          : parsed('boot_timeout', parseDuration, number: true),
       prebootKey: h['preboot_host_key'] == null
           ? null
           : parsed('preboot_host_key', HostKey.parse),
@@ -253,7 +300,7 @@ final class CliConfig {
     }
     return CliHost(
       host: host,
-      keyFile: keyFile == null ? null : resolvePath(keyFile, baseDir),
+      keyFile: keyFile == null ? null : path('key_file', keyFile),
       keyLabel: keyLabel,
       profile: command == null
           ? UnlockProfile.debian
@@ -265,10 +312,11 @@ final class CliConfig {
             ),
       passphraseFile: passphraseFile == null
           ? null
-          : resolvePath(passphraseFile, baseDir),
+          : path('passphrase_file', passphraseFile),
       secretLabel: secretLabel,
       diskPassphraseFiles: {
-        for (final e in diskFiles.entries) e.key: resolvePath(e.value, baseDir),
+        for (final e in diskFiles.entries)
+          e.key: path('disk_passphrase_files: ${e.key}', e.value),
       },
       diskSecrets: diskSecrets,
     );
@@ -288,9 +336,16 @@ final class CliConfig {
     return d;
   }
 
-  static String resolvePath(String p, String baseDir) {
+  /// Throws a [FormatException] for `~` when HOME is unset or empty.
+  static String resolvePath(
+    String p,
+    String baseDir, {
+    Map<String, String>? environment,
+  }) {
+    if (p.isEmpty) throw FormatException('empty path', p);
     if (p == '~' || p.startsWith('~/')) {
-      final home = Platform.environment['HOME'] ?? '';
+      final home = (environment ?? Platform.environment)['HOME'] ?? '';
+      if (home.isEmpty) throw FormatException('HOME is not set', p);
       return '$home${p.substring(1)}';
     }
     if (p.startsWith('/')) return p;

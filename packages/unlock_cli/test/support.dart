@@ -28,7 +28,7 @@ final class ScriptedInput implements SecretInput {
   bool get hasTerminal => terminal;
 
   @override
-  Uint8List prompt(String label, StringSink err) {
+  Future<Uint8List> prompt(String label, StringSink err) async {
     prompts.add(label);
     if (answers.isEmpty) fail('unexpected prompt "$label"');
     return bytesOf(answers.removeAt(0));
@@ -114,6 +114,19 @@ final class _Connection implements SshConnection {
 
   @override
   Future<void> close() async {}
+}
+
+/// Copy of [source] in [dir] with mode 600, as the CLI requires for key and passphrase files.
+String privateCopy(String source, Directory dir, [String? name]) {
+  final copy = File('${dir.path}/${name ?? source.split('/').last}');
+  File(source).copySync(copy.path);
+  chmod('600', copy.path);
+  return copy.absolute.path;
+}
+
+void chmod(String mode, String path) {
+  final r = Process.runSync('chmod', [mode, path]);
+  expect(r.exitCode, 0, reason: '${r.stderr}');
 }
 
 /// Private key text, its base64 body lines and the raw Ed25519 seed.

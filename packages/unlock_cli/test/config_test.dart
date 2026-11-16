@@ -214,6 +214,73 @@ hosts:
     );
   });
 
+  test('nulls and non-strings are errors that name the key', () {
+    for (final (yaml, text) in [
+      ('{name: a, preboot: [a, ~], key_file: k}', 'preboot: empty entry'),
+      ('{name: a, preboot: [{x: 1}], key_file: k}', 'is not a string'),
+      ('{name: a, preboot: 2222, key_file: k}', 'preboot: 2222 is not'),
+      ('{name: a, preboot: a, key_file: 0x10}', 'key_file must be a string'),
+      ('{name: a, preboot: a, key_file: ~}', 'key_file or key is required'),
+      ('{name: 5, preboot: a, key_file: k}', 'name must be a string (quote it)'),
+      ('{name: a, preboot: a, key_file: k, user: 0}', 'user must be a string'),
+      (
+        '{name: a, preboot: a, key_file: k, disk_passphrase_files: {sdb1: ~}}',
+        'disk_passphrase_files: sdb1 must be a string, not empty',
+      ),
+      (
+        '{name: a, preboot: a, key_file: k, disk_passphrase_files: {sdb1: 7}}',
+        'sdb1 must be a string',
+      ),
+      (
+        '{name: a, preboot: a, key_file: k, disk_secrets: {1: x}}',
+        'disk_secrets: disk name 1 must be a string',
+      ),
+      (
+        '{name: a, preboot: a, key_file: k, postboot: 22}',
+        'postboot must be a string',
+      ),
+      (
+        '{name: a, preboot: a, key_file: k, wait_timeout: 1.5}',
+        'wait_timeout must be a string',
+      ),
+    ]) {
+      expect(() => parse('hosts:\n  - $yaml'), configError(text), reason: yaml);
+    }
+    expect(
+      parse(
+        'hosts:\n  - {name: a, preboot: a, key_file: k, wait_timeout: 90}',
+      ).hosts.single.host.waitTimeout,
+      const Duration(seconds: 90),
+    );
+  });
+
+  test('~ without HOME is an error that names the key', () {
+    CliConfig withEnv(String host, Map<String, String> env) => CliConfig.parse(
+      'hosts:\n  - {name: a, preboot: a, $host}',
+      baseDir: '/cfg',
+      environment: env,
+    );
+    for (final env in [<String, String>{}, {'HOME': ''}]) {
+      expect(
+        () => withEnv('key_file: "~"', env),
+        configError('key_file: HOME is not set (~)'),
+      );
+      expect(
+        () => withEnv('key_file: k, passphrase_file: ~/p', env),
+        configError('passphrase_file: HOME is not set'),
+      );
+      expect(
+        () => withEnv('key_file: k, disk_passphrase_files: {d: ~/x}', env),
+        configError('disk_passphrase_files: d: HOME is not set'),
+      );
+    }
+    expect(
+      withEnv('key_file: ~/k', {'HOME': '/h'}).hosts.single.keyFile,
+      '/h/k',
+    );
+    expect(() => withEnv('key_file: ""', {}), configError('key_file: empty path'));
+  });
+
   test('the bench example parses', () {
     final c = CliConfig.load('example/bench.yaml');
     expect(c.hosts.map((h) => h.host.name), ['target1', 'target2']);

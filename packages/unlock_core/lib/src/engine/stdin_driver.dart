@@ -154,6 +154,14 @@ final class StdinDriver implements UnlockDriver {
     } on RunCancelled {
       session.close();
       rethrow;
+    } catch (e) {
+      // Once the passphrase may have been sent, any failure can mean the server went on booting.
+      try {
+        session.close();
+      } catch (_) {}
+      return wrote
+          ? _LostAfterPassphrase(disk!)
+          : _LostBeforePrompt('the unlock command failed: $e');
     } finally {
       out.close();
       err.close();

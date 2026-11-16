@@ -310,6 +310,10 @@ final class FakeExec implements ExecSession {
   final _eof = Completer<Uint8List>();
   bool killedBeforeEof = false;
 
+  /// Thrown by [write] or [closeStdin], as by a channel that is already gone.
+  Object? writeError;
+  Object? closeStdinError;
+
   FakeClock get clock => server.clock;
 
   Future<Uint8List> get stdinEof => _eof.future;
@@ -341,11 +345,17 @@ final class FakeExec implements ExecSession {
   Future<int?> get exitCode => _exit.future;
 
   @override
-  void write(Uint8List data) => _stdin.add(data);
+  void write(Uint8List data) {
+    _stdin.add(data);
+    if (writeError case final e?) Error.throwWithStackTrace(e, StackTrace.current);
+  }
 
   @override
   Future<void> closeStdin() async {
     if (!_eof.isCompleted) _eof.complete(_stdin.toBytes());
+    if (closeStdinError case final e?) {
+      Error.throwWithStackTrace(e, StackTrace.current);
+    }
   }
 
   @override

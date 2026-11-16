@@ -54,6 +54,15 @@ Future<int> tries() async {
   return int.parse(m[1]!);
 }
 
+/// The bench login key with mode 600, which the CLI requires; a git checkout may leave it 644.
+String benchKey() {
+  final copy = File('${work.absolute.path}/id_ed25519_bench');
+  File('$repo/bench/fixtures/id_ed25519_bench').copySync(copy.path);
+  final r = Process.runSync('chmod', ['600', copy.path]);
+  if (r.exitCode != 0) throw StateError('chmod failed: ${r.stderr}');
+  return copy.path;
+}
+
 String config({String? pinned}) {
   final pre = env['BENCH_TARGET1_PREBOOT'] ?? 'target1:2222';
   final post = env['BENCH_TARGET1_POSTBOOT'] ?? 'target1:22';
@@ -64,7 +73,7 @@ hosts:
     group: bench
     preboot: $pre
     postboot: $post
-    key_file: $repo/bench/fixtures/id_ed25519_bench
+    key_file: ${benchKey()}
     wait_timeout: 40s
     boot_timeout: 40s
 ${pinned == null ? '' : '    preboot_host_key: "$pinned"'}

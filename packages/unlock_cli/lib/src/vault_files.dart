@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:unlock_core/vault.dart';
 
@@ -70,7 +71,9 @@ final class VaultLocation {
   /// Runs [body] holding an exclusive lock, so writers do not overwrite each other.
   Future<T> exclusive<T>(Future<T> Function() body) async {
     await ensurePrivateDir(dir);
-    final file = File(lock).openSync(mode: FileMode.append);
+    final file = withOwnerOnlyUmask(
+      () => File(lock).openSync(mode: FileMode.append),
+    );
     try {
       file.lockSync(FileLock.blockingExclusive);
       return await body();
@@ -92,50 +95,72 @@ String checkLabel(String? label, String helpFor) {
   return label;
 }
 
-/// One label; keys also keep their public parts so `key show` needs no password.
+/// One label. Unauthenticated: the record itself proves its label, see [SealedLabel].
 final class IndexEntry {
   const IndexEntry({
     required this.label,
     required this.recordId,
     required this.created,
-    this.keyType,
-    this.publicLine,
-    this.fingerprint,
   });
 
+  /// Ignores the public key fields older versions stored.
   factory IndexEntry.fromJson(Object? json) {
     if (json is! Map<String, Object?>) throw const FormatException('entry');
-    String? opt(String k) => switch (json[k]) {
-      null => null,
+    String req(String k) => switch (json[k]) {
       final String s => s,
       _ => throw FormatException(k),
     };
-    String req(String k) => opt(k) ?? (throw FormatException(k));
     return IndexEntry(
       label: req('label'),
       recordId: req('recordId'),
       created: DateTime.parse(req('created')),
-      keyType: opt('type'),
-      publicLine: opt('publicKey'),
-      fingerprint: opt('fingerprint'),
     );
   }
 
   final String label;
   final String recordId;
   final DateTime created;
-  final String? keyType;
-  final String? publicLine;
-  final String? fingerprint;
 
   Map<String, Object?> toJson() => {
     'label': label,
     'recordId': recordId,
     'created': created.toUtc().toIso8601String(),
-    'type': ?keyType,
-    'publicKey': ?publicLine,
-    'fingerprint': ?fingerprint,
   };
+}
+
+/// Record payload written by this CLI: the label is sealed with the secret, so a changed index is detected.
+abstract final class SealedLabel {
+  static const _magic = [0x00, 0x6c, 0x62, 0x31];
+  static const _header = 5;
+
+  /// Header, label, secret; the caller wipes the result.
+  static Uint8List seal(String label, Uint8List secret) {
+    final name = ascii.encode(label);
+    if (name.length > 255) throw ArgumentError.value(label, 'label');
+    return Uint8List(_header + name.length + secret.length)
+      ..setAll(0, _magic)
+      ..[4] = name.length
+      ..setAll(_header, name)
+      ..setAll(_header + name.length, secret);
+  }
+
+  /// The sealed label, null for a record from before labels were sealed, and a view of the secret.
+  static (String?, Uint8List) open(Uint8List payload) {
+    for (var i = 0; i < _magic.length; i++) {
+      if (i >= payload.length || payload[i] != _magic[i]) return (null, payload);
+    }
+    final end = payload.length > 4 ? _header + payload[4] : -1;
+    if (end < 0 || end > payload.length) {
+      throw const CliExit.failure('damaged vault record: bad label header');
+    }
+    final String label;
+    try {
+      label = ascii.decode(Uint8List.sublistView(payload, _header, end));
+    } on FormatException {
+      throw const CliExit.failure('damaged vault record: bad label');
+    }
+    return (label, Uint8List.sublistView(payload, end));
+  }
 }
 
 /// Non-secret map from labels to vault record ids, stored as JSON next to the vault.
@@ -218,29 +243,26 @@ final class VaultIndex {
   );
 }
 
-/// Writes a mode-0600 temp file and renames it over [path].
+/// Writes a temp file created with mode 0600, renames it over [path] and syncs the directory.
 Future<void> writePrivateAtomic(String path, List<int> bytes) async {
   final temp = File('$path.tmp');
   try {
-    if (temp.existsSync()) temp.deleteSync();
-    temp.createSync(exclusive: true);
-    await _chmod('600', temp.path);
+    withOwnerOnlyUmask(() {
+      if (temp.existsSync()) temp.deleteSync();
+      temp.createSync(exclusive: true);
+    });
     temp.writeAsBytesSync(bytes, flush: true);
     temp.renameSync(path);
+    syncDirectory(temp.parent.path);
   } catch (_) {
     if (temp.existsSync()) temp.deleteSync();
     rethrow;
   }
 }
 
+/// Creates missing directories with mode 0700.
 Future<void> ensurePrivateDir(String path) async {
   final dir = Directory(path);
   if (dir.existsSync()) return;
-  dir.createSync(recursive: true);
-  await _chmod('700', path);
-}
-
-Future<void> _chmod(String mode, String path) async {
-  final r = await Process.run('chmod', [mode, '--', path]);
-  if (r.exitCode != 0) throw FileSystemException('chmod $mode failed', path);
+  withOwnerOnlyUmask(() => dir.createSync(recursive: true));
 }

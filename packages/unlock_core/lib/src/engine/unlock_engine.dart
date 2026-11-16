@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:meta/meta.dart';
+
 import '../log/sanitizer.dart';
 import '../model/endpoint.dart';
 import '../model/host.dart';
@@ -75,39 +77,57 @@ final class UnlockEngine {
   final EngineTimings timings;
   final Map<UnlockDriverKind, UnlockDriver> drivers;
 
-  final _controls = <String, RunControl>{};
+  /// Controls of the runs that have not finished, by host id.
+  final _runs = <Map<String, RunControl>>{};
+
+  /// True while a stream returned by [run] has not finished.
+  @visibleForTesting
+  bool get hasActiveRuns => _runs.isNotEmpty;
 
   /// Starts when listened to; closes after every host reached a final state.
+  ///
+  /// [cancel] takes effect even before listening; cancelling the subscription cancels every host.
   Stream<HostEvent> run(List<HostPlan> plans) {
     final ids = plans.map((p) => p.host.id).toSet();
     if (ids.length != plans.length) {
       throw ArgumentError('Host ids must be unique');
     }
+    final controls = {for (final id in ids) id: RunControl(clock)};
+    _runs.add(controls);
+    Future<void>? finished;
     late final StreamController<HostEvent> events;
     events = StreamController<HostEvent>(
-      onListen: () async {
-        await Future.wait([
+      onListen: () {
+        final done = finished = Future.wait([
           for (final p in plans)
-            _HostRun(
-              this,
-              p,
-              _controls[p.host.id] = RunControl(clock),
-              events.add,
-            ).run(),
-        ]);
-        await events.close();
+            _HostRun(this, p, controls[p.host.id]!, events.add).run(),
+        ]).whenComplete(() => _runs.remove(controls));
+        unawaited(done.then((_) => events.close()));
+      },
+      onCancel: () {
+        for (final c in controls.values) {
+          c.cancel();
+        }
+        return finished;
       },
     );
     return events.stream;
   }
 
   void cancel() {
-    for (final c in _controls.values) {
-      c.cancel();
+    for (final run in _runs) {
+      for (final c in run.values) {
+        c.cancel();
+      }
     }
+    _runs.clear();
   }
 
-  void cancelHost(String hostId) => _controls[hostId]?.cancel();
+  void cancelHost(String hostId) {
+    for (final run in _runs) {
+      run[hostId]?.cancel();
+    }
+  }
 }
 
 enum _Verdict { postbootKey, mismatch, unpinned, declined }
@@ -196,6 +216,7 @@ final class _HostRun implements RunLog {
   }
 
   Future<_Outcome> _flow() async {
+    control.throwIfCancelled();
     if (host.postbootCheck != PostBootCheck.none) {
       _emit('checking ${host.postboot}', phase: HostPhase.checkingIfUp);
       if (await _postbootCheck(timings.upCheckTimeout)) {

@@ -95,11 +95,15 @@ final Map<String, Map<String, _Spec>> _specs = {
         _password(p);
       },
     ),
-    'list': const _Spec('', 'List keys: label, type, fingerprint.', _none),
+    'list': const _Spec(
+      '',
+      'List keys: label, type, fingerprint, read from the vault records.',
+      _password,
+    ),
     'show': const _Spec(
       'LABEL',
-      'Print the public line and fingerprint of a key.',
-      _none,
+      'Print the public line and fingerprint of a key, read from its vault record.',
+      _password,
     ),
     'rm': const _Spec('LABEL', 'Delete a key from the vault.', _password),
   },
@@ -231,13 +235,15 @@ final class VaultCli {
       e.report(err);
       return e.code;
     } on VaultException catch (e) {
-      err.writeln('$executableName: ${e.message}');
+      err.writeln('$executableName: ${terminalSafe(e.message)}');
       return exitFailure;
     } on SshKeyException catch (e) {
-      err.writeln('$executableName: ${e.message}');
+      err.writeln('$executableName: ${terminalSafe(e.message)}');
       return exitFailure;
     } on FileSystemException catch (e) {
-      err.writeln('$executableName: ${e.path ?? e.message}: ${osMessage(e)}');
+      err.writeln(
+        '$executableName: ${terminalSafe('${e.path ?? e.message}: ${osMessage(e)}')}',
+      );
       return exitFailure;
     }
   }
@@ -266,13 +272,7 @@ final class VaultCli {
     final plain = <(LabelKind, String), Uint8List>{};
     try {
       for (final MapEntry(key: ref, value: e) in entries.entries) {
-        final record = await o.store.readRecord(e.recordId);
-        if (record == null || record.kind != ref.$1.recordKind) {
-          throw CliExit.failure(
-            'the vault record of ${ref.$1.word} ${ref.$2} is missing or of another kind',
-          );
-        }
-        plain[ref] = await o.vault.get(e.recordId);
+        plain[ref] = await _secretOf(o, ref.$1, e);
       }
       return plain;
     } catch (_) {
@@ -357,7 +357,7 @@ final class VaultCli {
       password = _fd(fd, 'password-fd');
     } else {
       _needTerminal('vault password', 'password-fd', helpFor);
-      password = input.prompt('Vault password: ', err);
+      password = await input.prompt('Vault password: ', err);
     }
     try {
       await vault.unlockWithPassword(password);
@@ -369,24 +369,30 @@ final class VaultCli {
   }
 
   /// Reads a new secret from [fd] as-is, or twice from the terminal.
-  Uint8List _newSecret({
+  Future<Uint8List> _newSecret({
     required int? fd,
     required String option,
     required String what,
     required String prompt,
     required int minLength,
     required String helpFor,
-  }) {
+  }) async {
     final Uint8List value;
     if (fd != null) {
       value = _fd(fd, option);
     } else {
       _needTerminal(what, option, helpFor);
-      value = input.prompt('$prompt: ', err);
-      final again = input.prompt(
-        'Repeat ${prompt[0].toLowerCase()}${prompt.substring(1)}: ',
-        err,
-      );
+      value = await input.prompt('$prompt: ', err);
+      final Uint8List again;
+      try {
+        again = await input.prompt(
+          'Repeat ${prompt[0].toLowerCase()}${prompt.substring(1)}: ',
+          err,
+        );
+      } catch (_) {
+        wipe(value);
+        rethrow;
+      }
       final same = sameBytes(value, again);
       wipe(again);
       if (!same) {
@@ -409,26 +415,69 @@ final class VaultCli {
     _Open o,
     LabelKind kind,
     String label,
-    Uint8List secret, {
-    SshKey? key,
-  }) async {
-    final id = await o.vault.put(kind.recordKind, secret);
+    Uint8List secret,
+  ) async {
+    final payload = SealedLabel.seal(label, secret);
+    final String id;
+    try {
+      id = await o.vault.put(kind.recordKind, payload);
+    } finally {
+      wipe(payload);
+    }
     o.index.add(
       kind,
-      IndexEntry(
-        label: label,
-        recordId: id,
-        created: DateTime.now(),
-        keyType: key?.type.wireName,
-        publicLine: key?.publicLine,
-        fingerprint: key?.fingerprint,
-      ),
+      IndexEntry(label: label, recordId: id, created: DateTime.now()),
     );
     try {
       await o.index.save(o.loc);
     } catch (_) {
       await o.vault.delete(id).then<void>((_) {}, onError: (Object _) {});
       rethrow;
+    }
+  }
+
+  /// Decrypts the record behind [e] and checks the label sealed in it; the result is a view the caller wipes.
+  Future<Uint8List> _secretOf(_Open o, LabelKind kind, IndexEntry e) async {
+    final label = e.label;
+    final record = await o.store.readRecord(e.recordId);
+    if (record == null || record.kind != kind.recordKind) {
+      throw CliExit.failure(
+        'the vault record of ${kind.word} $label is missing or of another kind',
+      );
+    }
+    final payload = await o.vault.get(e.recordId);
+    final (String?, Uint8List) opened;
+    try {
+      opened = SealedLabel.open(payload);
+    } catch (_) {
+      wipe(payload);
+      rethrow;
+    }
+    final (sealed, secret) = opened;
+    if (sealed == null) {
+      err.writeln(
+        '$executableName: warning: ${kind.word} $label was stored by an older '
+        'version, so its label cannot be verified; remove and add it again',
+      );
+    } else if (sealed != label) {
+      wipe(payload);
+      throw CliExit.failure(
+        'the label index ${o.loc.index} points ${kind.word} $label at the '
+        'record of ${kind.word} $sealed; it was changed outside $executableName',
+      );
+    }
+    return secret;
+  }
+
+  /// The key behind [e], with its public parts derived from the private key in the vault.
+  Future<SshKey> _verifiedKey(_Open o, IndexEntry e) async {
+    final pem = await _secretOf(o, LabelKind.key, e);
+    try {
+      final key = _keys.importOpenSsh(pem);
+      wipe(key.privateKeyPem);
+      return key;
+    } finally {
+      wipe(pem);
     }
   }
 
@@ -439,7 +488,7 @@ final class VaultCli {
     final fd = fdOption(a, 'password-fd', helpFor);
     final exists = CliExit.failure('a vault already exists at ${loc.vault}');
     if (loc.exists) throw exists;
-    final password = _newSecret(
+    final password = await _newSecret(
       fd: fd,
       option: 'password-fd',
       what: 'vault password',
@@ -464,6 +513,7 @@ final class VaultCli {
             vault.lock();
           }
           staging.renameSync(loc.vault);
+          syncDirectory(loc.dir);
         } catch (_) {
           if (staging.existsSync()) staging.deleteSync();
           rethrow;
@@ -526,7 +576,7 @@ final class VaultCli {
     return _write(a, (o) async {
       await _unlock(o.vault, fd, helpFor);
       try {
-        final password = _newSecret(
+        final password = await _newSecret(
           fd: newFd,
           option: 'new-password-fd',
           what: 'new vault password',
@@ -547,9 +597,9 @@ final class VaultCli {
     });
   }
 
-  void _printKey(String? publicLine, String? fingerprint) => out
-    ..writeln(publicLine ?? '?')
-    ..writeln(fingerprint ?? '?');
+  void _printKey(SshKey key) => out
+    ..writeln(terminalSafe(key.publicLine))
+    ..writeln(key.fingerprint);
 
   Future<int> _keyGenerate(ArgResults a) async {
     const helpFor = 'key generate';
@@ -564,14 +614,14 @@ final class VaultCli {
       try {
         key = _keys.generateEd25519(comment: comment);
         try {
-          await _store(o, LabelKind.key, label, key.privateKeyPem, key: key);
+          await _store(o, LabelKind.key, label, key.privateKeyPem);
         } finally {
           wipe(key.privateKeyPem);
         }
       } finally {
         o.vault.lock();
       }
-      _printKey(key.publicLine, key.fingerprint);
+      _printKey(key);
       return 0;
     });
   }
@@ -589,17 +639,23 @@ final class VaultCli {
       throw CliExit.usage('$path: ${osMessage(e)}', helpFor);
     }
     try {
+      if (openToOthers(path) case final mode?) {
+        err.writeln(
+          '$executableName: warning: $path is accessible by group or others '
+          '(mode $mode)',
+        );
+      }
       return await _write(a, (o) async {
         _free(o, LabelKind.key, label);
-        final key = _import(file, keyFd, helpFor);
+        final key = await _import(file, keyFd, helpFor);
         try {
           await _unlock(o.vault, fd, helpFor);
-          await _store(o, LabelKind.key, label, key.privateKeyPem, key: key);
+          await _store(o, LabelKind.key, label, key.privateKeyPem);
         } finally {
           wipe(key.privateKeyPem);
           o.vault.lock();
         }
-        _printKey(key.publicLine, key.fingerprint);
+        _printKey(key);
         return 0;
       });
     } finally {
@@ -607,7 +663,7 @@ final class VaultCli {
     }
   }
 
-  SshKey _import(Uint8List file, int? fd, String helpFor) {
+  Future<SshKey> _import(Uint8List file, int? fd, String helpFor) async {
     var passphrase = fd == null ? null : _fd(fd, 'key-passphrase-fd');
     try {
       try {
@@ -621,7 +677,7 @@ final class VaultCli {
             helpFor,
           );
         }
-        passphrase = input.prompt('Key passphrase: ', err);
+        passphrase = await input.prompt('Key passphrase: ', err);
         return _keys.importOpenSsh(file, passphrase: passphrase);
       }
     } finally {
@@ -630,26 +686,47 @@ final class VaultCli {
   }
 
   Future<int> _keyList(ArgResults a) async {
-    _noArgs(a, 'key list');
-    final keys = (await _open(_locate(a))).index.of(LabelKind.key);
-    if (keys.isEmpty) return 0;
+    const helpFor = 'key list';
+    _noArgs(a, helpFor);
+    final fd = fdOption(a, 'password-fd', helpFor);
+    final o = await _open(_locate(a));
+    final entries = o.index.of(LabelKind.key);
+    if (entries.isEmpty) return 0;
+    await _unlock(o.vault, fd, helpFor);
+    final List<SshKey> keys;
+    try {
+      keys = [for (final e in entries) await _verifiedKey(o, e)];
+    } finally {
+      o.vault.lock();
+    }
     int widest(String head, Iterable<String> cells) =>
         [head, ...cells].map((s) => s.length).reduce((a, b) => a > b ? a : b);
-    final lw = widest('LABEL', keys.map((k) => k.label));
-    final tw = widest('TYPE', keys.map((k) => k.keyType ?? '?'));
+    final types = [for (final k in keys) k.type.wireName];
+    final lw = widest('LABEL', entries.map((e) => e.label));
+    final tw = widest('TYPE', types);
     out.writeln('${'LABEL'.padRight(lw)}  ${'TYPE'.padRight(tw)}  FINGERPRINT');
-    for (final k in keys) {
+    for (var i = 0; i < keys.length; i++) {
       out.writeln(
-        '${k.label.padRight(lw)}  ${(k.keyType ?? '?').padRight(tw)}  ${k.fingerprint ?? '?'}',
+        '${entries[i].label.padRight(lw)}  ${types[i].padRight(tw)}  ${keys[i].fingerprint}',
       );
     }
     return 0;
   }
 
   Future<int> _keyShow(ArgResults a) async {
-    final label = _one(a, 'LABEL', 'key show');
-    final e = _entry(await _open(_locate(a)), LabelKind.key, label);
-    _printKey(e.publicLine, e.fingerprint);
+    const helpFor = 'key show';
+    final label = _one(a, 'LABEL', helpFor);
+    final fd = fdOption(a, 'password-fd', helpFor);
+    final o = await _open(_locate(a));
+    final e = _entry(o, LabelKind.key, label);
+    await _unlock(o.vault, fd, helpFor);
+    final SshKey key;
+    try {
+      key = await _verifiedKey(o, e);
+    } finally {
+      o.vault.lock();
+    }
+    _printKey(key);
     return 0;
   }
 
@@ -664,7 +741,7 @@ final class VaultCli {
       _free(o, LabelKind.secret, label);
       await _unlock(o.vault, fd, helpFor);
       try {
-        final secret = _newSecret(
+        final secret = await _newSecret(
           fd: secretFd,
           option: 'secret-fd',
           what: 'passphrase',
@@ -702,11 +779,21 @@ final class VaultCli {
       final e = _entry(o, kind, label);
       await _unlock(o.vault, fd, helpFor);
       try {
+        final exists = (await o.store.readRecord(e.recordId)) != null;
+        if (exists) {
+          // Never delete a record that belongs to another label; a corrupt one is lost anyway.
+          try {
+            wipe(await _secretOf(o, kind, e));
+          } on VaultCorruptException {
+            err.writeln(
+              '$executableName: warning: the record of ${kind.word} $label '
+              'is damaged',
+            );
+          }
+        }
         o.index.remove(kind, label);
         await o.index.save(o.loc);
-        if ((await o.store.readRecord(e.recordId)) != null) {
-          await o.vault.delete(e.recordId);
-        }
+        if (exists) await o.vault.delete(e.recordId);
       } finally {
         o.vault.lock();
       }

@@ -261,14 +261,55 @@ final class SshKeyService {
         if ((e * d) % (p1 * q1 ~/ p1.gcd(q1)) != BigInt.one) {
           throw const MalformedKeyException();
         }
-      case OpenSSHEcdsaKeyPair(:final name):
+      case OpenSSHEcdsaKeyPair(:final name, :final curveId, :final q, :final d):
         if (SshKeyType.fromWireName(name) == null) {
           throw UnsupportedKeyException('Unsupported key type "$name".');
+        }
+        if (!_ecdsaPublicPoint(curveId, d).equals(q)) {
+          throw const MalformedKeyException(
+            'The private and public parts of the key do not match.',
+          );
         }
       default:
         throw const UnsupportedKeyException('Unsupported key type.');
     }
   }
+
+  /// d·G, computed by dartssh2's SEC1 decoder from a key blob that carries no public point.
+  Uint8List _ecdsaPublicPoint(String curveId, BigInt d) {
+    final (oid, size) = switch (curveId) {
+      'nistp256' => (const [0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07], 32),
+      'nistp384' => (const [0x2b, 0x81, 0x04, 0x00, 0x22], 48),
+      'nistp521' => (const [0x2b, 0x81, 0x04, 0x00, 0x23], 66),
+      _ => throw UnsupportedKeyException('Unsupported ECDSA curve "$curveId".'),
+    };
+    if (d <= BigInt.zero || d.bitLength > size * 8) {
+      throw const MalformedKeyException();
+    }
+    // SEQUENCE { INTEGER 1, OCTET STRING d, [0] { OID curve } }
+    final bodyLength = 3 + 2 + size + 2 + 2 + oid.length;
+    final der = Uint8List(2 + bodyLength);
+    var at = 0;
+    for (final b in [0x30, bodyLength, 0x02, 0x01, 0x01, 0x04, size]) {
+      der[at++] = b;
+    }
+    for (var i = 0, v = d; i < size; i++, v >>= 8) {
+      der[at + size - 1 - i] = (v & _byteMask).toInt();
+    }
+    at += size;
+    for (final b in [0xa0, 2 + oid.length, 0x06, oid.length, ...oid]) {
+      der[at++] = b;
+    }
+    try {
+      return EcKeyPair(null, der).getPrivateKeys().q;
+    } catch (_) {
+      throw const MalformedKeyException();
+    } finally {
+      der.fillRange(0, der.length, 0);
+    }
+  }
+
+  static final _byteMask = BigInt.from(0xff);
 
   int _bits(OpenSSHKeyPair pair) => switch (pair) {
     OpenSSHRsaKeyPair(:final n) => n.bitLength,

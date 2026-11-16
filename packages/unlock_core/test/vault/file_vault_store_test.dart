@@ -115,6 +115,41 @@ void main() {
     );
   }, testOn: 'posix');
 
+  test('the temp file is owner-only from creation; a loose file is replaced', () async {
+    final modes = <int>[];
+    final store = await FileVaultStore.open(
+      path,
+      onBeforeRename: () async =>
+          modes.add(File('$path.tmp').statSync().mode & 0x1FF),
+    );
+    final vault = await newVault(store: store);
+    final chmod = await Process.run('chmod', ['644', path]);
+    expect(chmod.exitCode, 0);
+    await vault.put(VaultRecordKind.passphrase, fakePassphrase());
+    expect(modes, isNotEmpty);
+    expect(modes.toSet(), {int.parse('600', radix: 8)});
+    expect(File(path).statSync().mode & 0x1FF, int.parse('600', radix: 8));
+  }, testOn: 'posix');
+
+  test('withOwnerOnlyUmask restores the umask; syncDirectory is safe', () {
+    final before = File('${dir.path}/before')..createSync();
+    final (file, sub) = withOwnerOnlyUmask(() {
+      final f = File('${dir.path}/inside')..createSync();
+      final d = Directory('${dir.path}/a/b')..createSync(recursive: true);
+      return (f, d);
+    });
+    final after = File('${dir.path}/after')..createSync();
+    expect(file.statSync().mode & 0x1FF, int.parse('600', radix: 8));
+    expect(sub.statSync().mode & 0x1FF, int.parse('700', radix: 8));
+    expect(
+      Directory('${dir.path}/a').statSync().mode & 0x1FF,
+      int.parse('700', radix: 8),
+    );
+    expect(after.statSync().mode, before.statSync().mode);
+    syncDirectory(dir.path);
+    syncDirectory('${dir.path}/missing');
+  }, testOn: 'posix');
+
   group('atomic writes', () {
     test(
       'a failed write keeps the old file, no temp file, old state',

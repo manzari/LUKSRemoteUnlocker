@@ -83,6 +83,7 @@ final class Host {
     if (name.trim().isEmpty) 'name is empty',
     if (user.trim().isEmpty) 'user is empty',
     if (postbootPort < 1 || postbootPort > 65535) 'post-boot port is invalid',
+    // Ports only: Dropbear listens on every address, and two names may be the same machine.
     if (postbootCheck == PostBootCheck.tcp &&
         preboot.any((e) => e.port == postbootPort))
       'the tcp check needs a post-boot port that differs from every pre-boot port',
@@ -90,6 +91,7 @@ final class Host {
     if (bootTimeout <= Duration.zero) 'boot timeout must be positive',
   ];
 
+  /// The clear flags reset a field to null, which passing null cannot.
   Host copyWith({
     String? name,
     String? group,
@@ -106,17 +108,19 @@ final class Host {
     bool clearPostbootKey = false,
     bool? legacyAlgorithms,
     bool? enabled,
+    bool clearGroup = false,
+    bool clearPostbootHost = false,
   }) => Host(
     id: id,
     name: name ?? this.name,
-    group: group ?? this.group,
+    group: clearGroup ? null : group ?? this.group,
     preboot: preboot ?? this.preboot,
     user: user ?? this.user,
     keyId: keyId,
     secretId: secretId,
     diskOverrides: diskOverrides,
     profileId: profileId,
-    postbootHost: postbootHost ?? this.postbootHost,
+    postbootHost: clearPostbootHost ? null : postbootHost ?? this.postbootHost,
     postbootPort: postbootPort ?? this.postbootPort,
     postbootCheck: postbootCheck ?? this.postbootCheck,
     waitTimeout: waitTimeout ?? this.waitTimeout,

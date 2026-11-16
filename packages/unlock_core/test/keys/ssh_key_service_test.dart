@@ -320,6 +320,31 @@ void main() {
       expectThrows<MalformedKeyException>(pem(c));
     });
 
+    test('ECDSA public point that does not belong to the scalar', () async {
+      Future<OpenSSHEcdsaKeyPair> ecdsa(int bits) async {
+        final text = latin1.decode(kg.read(await kg.newKey('ecdsa', bits: bits)));
+        return OpenSSHKeyPairs.decode(
+              SSHPem.decode(text).content,
+            ).getPrivateKeys(null).single
+            as OpenSSHEcdsaKeyPair;
+      }
+
+      Uint8List pem(OpenSSHEcdsaKeyPair p) => bytes(p.toPem());
+
+      for (final bits in [256, 384, 521]) {
+        final a = await ecdsa(bits);
+        final b = await ecdsa(bits);
+        final good = OpenSSHEcdsaKeyPair(a.curveId, a.q, a.d, 'good');
+        expect(service.importOpenSsh(pem(good)).type.wireName, a.name);
+        expectThrows<MalformedKeyException>(
+          pem(OpenSSHEcdsaKeyPair(a.curveId, b.q, a.d, 'mixed')),
+        );
+        expectThrows<MalformedKeyException>(
+          pem(OpenSSHEcdsaKeyPair(a.curveId, a.q, a.d + BigInt.one, 'off')),
+        );
+      }
+    });
+
     test('PuTTY key', () {
       expectThrows<UnsupportedKeyException>(
         bytes('PuTTY-User-Key-File-3: ssh-ed25519\nEncryption: none\n'),

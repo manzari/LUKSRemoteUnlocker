@@ -2,6 +2,7 @@
 library;
 
 export 'src/vault/file_vault_store.dart';
+export 'src/vault/private_files.dart';
 export 'src/vault/vault.dart';
 export 'src/vault/vault_crypto.dart'
     show PasswordKdf, argon2idInIsolate, argon2idInline;

@@ -92,17 +92,41 @@ void main() {
     );
   }
 
-  Future<Uint8List> record(LabelKind kind, String label) async {
+  Future<Vault> unlocked() async {
     final store = await FileVaultStore.open(vaultPath);
     final vault = await Vault.open(store, kdf: argon2idInline);
-    final index = VaultIndex.load(VaultLocation(vaultPath), vault.id);
     await vault.unlockWithPassword(bytesOf(pw));
+    return vault;
+  }
+
+  Future<Uint8List> record(LabelKind kind, String label) async {
+    final vault = await unlocked();
+    final index = VaultIndex.load(VaultLocation(vaultPath), vault.id);
     try {
-      return await vault.get(index.find(kind, label)!.recordId);
+      final payload = await vault.get(index.find(kind, label)!.recordId);
+      final (sealed, secret) = SealedLabel.open(payload);
+      expect(sealed, label);
+      return Uint8List.fromList(secret);
     } finally {
       vault.lock();
     }
   }
+
+  String indexPath() => VaultLocation(vaultPath).index;
+
+  Map<String, Object?> readIndex() =>
+      jsonDecode(File(indexPath()).readAsStringSync()) as Map<String, Object?>;
+
+  void writeIndex(Map<String, Object?> json) =>
+      File(indexPath()).writeAsStringSync(jsonEncode(json));
+
+  Map<String, Object?> indexEntry(
+    Map<String, Object?> json,
+    String list,
+    String label,
+  ) => (json[list]! as List<Object?>).cast<Map<String, Object?>>().firstWhere(
+    (e) => e['label'] == label,
+  );
 
   Future<String> generate(String label) async {
     expect(await cli(['key', 'generate', '--label', label], answers: [pw]), 0);
@@ -165,7 +189,9 @@ void main() {
       final loc = VaultLocation(vaultPath);
       expect(File(loc.vault).statSync().modeString(), 'rw-------');
       expect(File(loc.index).statSync().modeString(), 'rw-------');
+      expect(File(loc.lock).statSync().modeString(), 'rw-------');
       expect(Directory(loc.dir).statSync().modeString(), 'rwx------');
+      expect(Directory('${dir.path}/data').listSync(), hasLength(3));
       expect(File(loc.staging).existsSync(), isFalse);
       expect(jsonDecode(File(loc.index).readAsStringSync()), {
         'version': 1,
@@ -322,14 +348,21 @@ void main() {
       final stored = const SshKeyService().importOpenSsh(pem);
       expect(stored.fingerprint, printed[1]);
 
-      expect(await cli(['key', 'show', 'laptop']), 0);
+      expect(await cli(['key', 'show', 'laptop'], answers: [pw]), 0);
+      expect(input.prompts, ['Vault password: ']);
       expect(out.toString(), '$line\n${printed[1]}\n');
-      expect(await cli(['key', 'list']), 0);
+      expect(await cli(['key', 'list'], answers: [pw]), 0);
       expect(
         out.toString(),
         'LABEL   TYPE         FINGERPRINT\n'
         'laptop  ssh-ed25519  ${printed[1]}\n',
       );
+      expect(
+        await cli(['key', 'show', 'laptop', '--password-fd', '3'], fds: {3: pw}),
+        0,
+      );
+      expect(await cli(['key', 'list'], answers: ['wrong-pass-1']), 1);
+      expect(err.toString(), contains('wrong vault password'));
     });
 
     test('--comment sets the comment', () async {
@@ -497,7 +530,7 @@ void main() {
       expect(await cli(['key', 'rm', 'a'], answers: [pw]), 0);
       expect(out.toString(), 'Removed key a\n');
       expect(await recordIds(), hasLength(1));
-      expect(await cli(['key', 'list']), 0);
+      expect(await cli(['key', 'list'], answers: [pw]), 0);
       expect(out.toString(), isNot(contains('a ')));
       expect(out.toString(), contains('\nb '));
     });
@@ -585,7 +618,7 @@ void main() {
       expect(await cli(['secret', 'rm', 'nas'], answers: [pw]), 0);
       expect(await cli(['secret', 'list']), 0);
       expect(out.toString(), 'web\n');
-      expect(await cli(['key', 'list']), 0);
+      expect(await cli(['key', 'list'], answers: [pw]), 0);
       expect(out.toString(), contains('nas'));
     });
   });
@@ -615,6 +648,141 @@ void main() {
       }
     },
   );
+
+  group('label index is not trusted', () {
+    String config(String hosts) {
+      final f = File('${dir.path}/hosts.yaml')
+        ..writeAsStringSync(
+          'defaults:\n  postboot_check: tcp\n  wait_timeout: 5\n  boot_timeout: 5\n'
+          'hosts:\n$hosts',
+        );
+      return f.path;
+    }
+
+    void repoint(String list, String label, String to) {
+      final json = readIndex();
+      indexEntry(json, list, label)['recordId'] = indexEntry(
+        json,
+        list,
+        to,
+      )['recordId'];
+      writeIndex(json);
+    }
+
+    test('a secret label pointed at another record is refused', () async {
+      await init();
+      await generate('laptop');
+      await addSecret('nas', fakeLuksPass);
+      await addSecret('web', fakeNewPassword);
+      repoint('secrets', 'nas', 'web');
+      final path = config(
+        '  - {name: a, preboot: "a:2222", postboot: "a:22", key: laptop, secret: nas}\n',
+      );
+      expect(await cli(['unlock', '-c', path, '--all'], answers: [pw]), 1);
+      expect(err.toString(), contains('points secret nas at the record of secret web'));
+      expect(world.secrets, isEmpty);
+      expect(world.keys, isEmpty);
+
+      final before = await recordIds();
+      expect(await cli(['secret', 'rm', 'nas'], answers: [pw]), 1);
+      expect(err.toString(), contains('changed outside'));
+      expect(await recordIds(), before);
+      expect(await record(LabelKind.secret, 'web'), bytesOf(fakeNewPassword));
+    });
+
+    test('key show and list derive the key from the vault record', () async {
+      await init();
+      final a = await generate('a');
+      final b = await generate('b');
+      final json = readIndex();
+      indexEntry(json, 'keys', 'a')
+        ..['publicKey'] = 'ssh-ed25519 AAAAattacker a'
+        ..['fingerprint'] = 'SHA256:attacker';
+      writeIndex(json);
+      expect(await cli(['key', 'show', 'a'], answers: [pw]), 0);
+      expect(out.toString().split('\n').first, a);
+      expect(await cli(['key', 'list'], answers: [pw]), 0);
+      expect(out.toString(), isNot(contains('attacker')));
+
+      repoint('keys', 'a', 'b');
+      expect(await cli(['key', 'show', 'a'], answers: [pw]), 1);
+      expect(err.toString(), contains('points key a at the record of key b'));
+      expect(out.toString(), isNot(contains(b.split(' ')[1])));
+      expect(await cli(['key', 'list'], answers: [pw]), 1);
+      final path = config(
+        '  - {name: x, preboot: "x:2222", postboot: "x:22", key: a}\n',
+      );
+      expect(await cli(['unlock', '-c', path, '--all'], answers: [pw]), 1);
+      expect(world.keys, isEmpty);
+    });
+
+    test('a key label pointed at a secret record is refused', () async {
+      await init();
+      await generate('k');
+      await addSecret('s', fakeLuksPass);
+      final json = readIndex();
+      indexEntry(json, 'keys', 'k')['recordId'] = indexEntry(
+        json,
+        'secrets',
+        's',
+      )['recordId'];
+      writeIndex(json);
+      expect(await cli(['key', 'show', 'k'], answers: [pw]), 1);
+      expect(err.toString(), contains('missing or of another kind'));
+      expect(await cli(['key', 'rm', 'k'], answers: [pw]), 1);
+      expect(await recordIds(), hasLength(2));
+    });
+
+    test('records from before sealed labels are used with a warning', () async {
+      await init();
+      await generate('laptop');
+      final vault = await unlocked();
+      final id = await vault.put(
+        VaultRecordKind.passphrase,
+        bytesOf(fakeLuksPass),
+      );
+      vault.lock();
+      final json = readIndex();
+      (json['secrets']! as List<Object?>).add({
+        'label': 'old',
+        'recordId': id,
+        'created': DateTime.now().toUtc().toIso8601String(),
+      });
+      writeIndex(json);
+      final path = config(
+        '  - {name: a, preboot: "a:2222", postboot: "a:22", key: laptop, secret: old}\n',
+      );
+      expect(await cli(['unlock', '-c', path, '--all'], answers: [pw]), 0);
+      expect(world.secrets['a']!['sda3_crypt'], fakeLuksPass);
+      expect(err.toString(), contains('secret old was stored by an older version'));
+      expect(await cli(['secret', 'rm', 'old'], answers: [pw]), 0);
+      expect(await recordIds(), hasLength(1));
+    });
+
+    test('the index no longer stores public keys', () async {
+      await init();
+      await generate('laptop');
+      final entry = indexEntry(readIndex(), 'keys', 'laptop');
+      expect(entry.keys.toSet(), {'label', 'recordId', 'created'});
+    });
+  });
+
+  test('key import warns about a key file readable by others', () async {
+    await init();
+    final file = privateCopy(benchKey, dir, 'loose');
+    chmod('644', file);
+    expect(
+      await cli(['key', 'import', '--label', 'loose', file], answers: [pw]),
+      0,
+    );
+    expect(err.toString(), contains('$file is accessible by group or others (mode 0644)'));
+    chmod('600', file);
+    expect(
+      await cli(['key', 'import', '--label', 'tight', file], answers: [pw]),
+      0,
+    );
+    expect(err.toString(), isEmpty);
+  }, testOn: 'posix');
 
   group('help and usage', () {
     test('groups and commands', () async {
@@ -677,7 +845,7 @@ void main() {
       await fill();
       final path = config(
         '$vaultHost  - {name: b, preboot: "b:2222", postboot: "b:22", '
-        'key_file: ${File(benchKey).absolute.path}}\n',
+        'key_file: ${privateCopy(benchKey, dir)}}\n',
       );
       expect(
         await cli(
@@ -792,7 +960,7 @@ final class _Stdin implements PassphraseReader {
   final void Function() onRead;
 
   @override
-  Uint8List read({int? fd, required StringSink prompt}) {
+  Future<Uint8List> read({int? fd, required StringSink prompt}) async {
     onRead();
     return bytesOf(value);
   }

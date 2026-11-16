@@ -97,9 +97,26 @@ void main() {
       );
     });
 
-    test('default params are the OWASP minimum', () {
+    test('default params: 64 MiB, 3 passes, 1 lane', () {
       const d = Argon2Params.defaults;
-      expect([d.memoryKiB, d.iterations, d.parallelism], [19456, 2, 1]);
+      expect([d.memoryKiB, d.iterations, d.parallelism], [65536, 3, 1]);
+      expect(d.isWithinBounds, isTrue);
+    });
+
+    test('memory ceiling is 256 MiB; the former defaults stay valid', () {
+      Argon2Params m(int kiB) =>
+          Argon2Params(memoryKiB: kiB, iterations: 1, parallelism: 1);
+      expect(Argon2Params.maxMemoryKiB, 256 * 1024);
+      expect(m(256 * 1024).isWithinBounds, isTrue);
+      expect(m(256 * 1024 + 1).isWithinBounds, isFalse);
+      expect(
+        const Argon2Params(
+          memoryKiB: 19456,
+          iterations: 2,
+          parallelism: 1,
+        ).isWithinBounds,
+        isTrue,
+      );
     });
   });
 
@@ -202,6 +219,7 @@ void main() {
       );
       for (final params in const [
         Argon2Params(memoryKiB: 1 << 30, iterations: 1, parallelism: 1),
+        Argon2Params(memoryKiB: 1 << 19, iterations: 1, parallelism: 1),
         Argon2Params(memoryKiB: 64, iterations: 100000, parallelism: 1),
         Argon2Params(memoryKiB: 64, iterations: 1, parallelism: 0),
         Argon2Params(memoryKiB: 8, iterations: 1, parallelism: 4),

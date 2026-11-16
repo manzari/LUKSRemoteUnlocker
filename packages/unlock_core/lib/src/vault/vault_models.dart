@@ -64,13 +64,15 @@ final class Argon2Params {
     required this.parallelism,
   });
 
+  /// For new slots; existing slots keep the params stored with them.
   static const Argon2Params defaults = Argon2Params(
-    memoryKiB: 19456,
-    iterations: 2,
+    memoryKiB: 65536,
+    iterations: 3,
     parallelism: 1,
   );
 
-  static const int maxMemoryKiB = 1 << 20;
+  /// 256 MiB, which a phone can still allocate.
+  static const int maxMemoryKiB = 1 << 18;
   static const int maxIterations = 64;
   static const int maxParallelism = 16;
 

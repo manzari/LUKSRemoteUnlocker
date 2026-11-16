@@ -96,7 +96,11 @@ void main() {
         passwordSlotAad(
           formatVersion: 1,
           vaultId: vaultId,
-          params: Argon2Params.defaults,
+          params: const Argon2Params(
+            memoryKiB: 19456,
+            iterations: 2,
+            parallelism: 1,
+          ),
           salt: salt,
         ),
         [
