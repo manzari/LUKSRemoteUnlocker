@@ -23,10 +23,10 @@ IN_DART_TTY = $(RUN) -it -v $(DART_HOME_VOLUME):/home/dev $(DART_IMAGE)
 IN_FLUTTER_TTY = $(RUN) -it -v $(FLUTTER_HOME_VOLUME):/home/dev $(FLUTTER_IMAGE)
 
 .PHONY: help images image-dart image-flutter image-emulator test test-core test-cli test-app test-bench test-app-bench \
-	test-android-bench cli apk linux shell-dart shell-flutter run-dart run-flutter bench-up bench-down clean
+	test-android-bench cli apk linux icons shell-dart shell-flutter run-dart run-flutter bench-up bench-down clean
 
 help:
-	@echo "Targets: test test-core test-cli test-app test-bench test-app-bench test-android-bench cli apk linux"
+	@echo "Targets: test test-core test-cli test-app test-bench test-app-bench test-android-bench cli apk linux icons"
 	@echo "         shell-dart shell-flutter run-dart CMD=... run-flutter CMD=... bench-up bench-down images clean"
 
 images: image-dart image-flutter
@@ -58,6 +58,9 @@ apk: image-flutter
 
 linux: image-flutter
 	$(IN_FLUTTER) bash -ec 'cd app; flutter build linux --debug'
+
+icons:
+	docker run --rm -e HOST_UID=$(HOST_UID) -e HOST_GID=$(HOST_GID) -v "$(CURDIR)":/work -w /work alpine:3.22 tool/gen_icons.sh
 
 shell-dart: image-dart
 	$(IN_DART_TTY) bash

@@ -90,6 +90,15 @@ class _VaultSetupScreenState extends ConsumerState<VaultSetupScreen> {
             child: ListView(
               padding: const EdgeInsets.all(16),
               children: [
+                Center(
+                  child: Image.asset(
+                    'assets/logo.png',
+                    width: 88,
+                    height: 88,
+                    semanticLabel: 'LUKS Remote Unlocker',
+                  ),
+                ),
+                const SizedBox(height: 16),
                 const Text(
                   'SSH keys and disk passphrases are encrypted with a vault '
                   'key that never leaves this device.',

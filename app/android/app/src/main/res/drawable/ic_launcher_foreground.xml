@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Mark from docs/logo.svg, scaled into the adaptive icon safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="512"
+    android:viewportHeight="512">
+    <group
+        android:pivotX="256"
+        android:pivotY="256"
+        android:scaleX="0.72"
+        android:scaleY="0.72">
+        <group
+            android:translateX="-22"
+            android:translateY="12">
+            <path
+                android:pathData="M292.3,100.4A106,106 0 0 1 355.6,163.7"
+                android:strokeColor="#7FD6C2"
+                android:strokeLineCap="round"
+                android:strokeWidth="22" />
+            <path
+                android:pathData="M307.3,59A150,150 0 0 1 397,148.7"
+                android:strokeAlpha="0.55"
+                android:strokeColor="#7FD6C2"
+                android:strokeLineCap="round"
+                android:strokeWidth="22" />
+            <path
+                android:pathData="M194,262V200a62,62 0 0 1 124,0v22"
+                android:strokeColor="#F5B83D"
+                android:strokeLineCap="round"
+                android:strokeLineJoin="round"
+                android:strokeWidth="30" />
+            <path
+                android:fillColor="#F5B83D"
+                android:pathData="M180,262h152a32,32 0 0 1 32,32v96a32,32 0 0 1 -32,32h-152a32,32 0 0 1 -32,-32v-96a32,32 0 0 1 32,-32z" />
+            <path
+                android:pathData="M214,312l32,30 -32,30M266,372h38"
+                android:strokeColor="#14203F"
+                android:strokeLineCap="round"
+                android:strokeLineJoin="round"
+                android:strokeWidth="20" />
+        </group>
+    </group>
+</vector>
