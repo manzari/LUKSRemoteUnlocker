@@ -248,6 +248,7 @@ void main() {
       expect(find.byType(NavigationBar), findsOneWidget);
       expect(find.byType(NavigationRail), findsNothing);
       for (final (tab, title) in [
+        ('History', 'Run history'),
         ('Keys', 'SSH keys'),
         ('Passphrases', 'Disk passphrases'),
         ('Profiles', 'Unlock profiles'),

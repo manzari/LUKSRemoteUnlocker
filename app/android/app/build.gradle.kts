@@ -19,7 +19,7 @@ fun keystoreProperty(name: String): String =
         ?: throw GradleException("$name is missing in ${keystorePropertiesFile.path}")
 
 android {
-    namespace = "cc.b0t.luksremoteunlocker"
+    namespace = "dev.manzari.luksremoteunlocker"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -30,7 +30,7 @@ android {
 
     defaultConfig {
         // Placeholder application id; final id still to be decided.
-        applicationId = "cc.b0t.luksremoteunlocker"
+        applicationId = "dev.manzari.luksremoteunlocker"
         // biometric_vault needs API 24.
         minSdk = 24
         targetSdk = flutter.targetSdkVersion

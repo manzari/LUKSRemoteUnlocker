@@ -51,4 +51,7 @@ RUN cd /tmp \
  && flutter build linux --debug \
  && cd / && rm -rf /tmp/warmup
 
+# SDK parts the app's plugins request at build time (flutter_foreground_task: API 35, jni: CMake).
+RUN yes | sdkmanager "platforms;android-35" "cmake;3.22.1" >/dev/null
+
 WORKDIR /work

@@ -22,12 +22,12 @@ IN_FLUTTER = $(RUN) -v $(FLUTTER_HOME_VOLUME):/home/dev $(FLUTTER_IMAGE)
 IN_DART_TTY = $(RUN) -it -v $(DART_HOME_VOLUME):/home/dev $(DART_IMAGE)
 IN_FLUTTER_TTY = $(RUN) -it -v $(FLUTTER_HOME_VOLUME):/home/dev $(FLUTTER_IMAGE)
 
-.PHONY: help images image-dart image-flutter test test-core test-cli test-app test-bench cli apk linux \
-	shell-dart shell-flutter run-dart run-flutter bench-up bench-down clean
+.PHONY: help images image-dart image-flutter image-emulator test test-core test-cli test-app test-bench test-app-bench \
+	test-android-bench cli apk linux shell-dart shell-flutter run-dart run-flutter bench-up bench-down clean
 
 help:
-	@echo "Targets: test test-core test-cli test-app test-bench cli apk linux shell-dart shell-flutter"
-	@echo "         run-dart CMD=... run-flutter CMD=... bench-up bench-down images clean"
+	@echo "Targets: test test-core test-cli test-app test-bench test-app-bench test-android-bench cli apk linux"
+	@echo "         shell-dart shell-flutter run-dart CMD=... run-flutter CMD=... bench-up bench-down images clean"
 
 images: image-dart image-flutter
 
@@ -80,6 +80,46 @@ test-bench: image-dart
 		-v $(DART_HOME_VOLUME):/home/dev $(DART_IMAGE) bash -ec 'dart pub get >/dev/null; \
 		cd packages/unlock_core; dart test -j 1 --tags bench $(ARGS) test/integration; \
 		cd ../unlock_cli; dart test -j 1 --tags bench $(ARGS) test'
+
+# The Linux app under Xvfb unlocks target1-3 in parallel; assumes `make bench-up`, resets the targets first.
+BENCH_COMPOSE := docker compose -f bench/compose.yaml
+BENCH_TARGETS := target1 target2 target3
+BENCH_PASS := fake-bench-pass
+BENCH_RESET = for t in $(BENCH_TARGETS); do \
+		$(BENCH_COMPOSE) exec -T $$t bench-ctl clear >/dev/null && \
+		$(BENCH_COMPOSE) exec -T $$t bench-ctl set PASSPHRASE=$(BENCH_PASS) >/dev/null || exit 1; \
+	done
+# "target1=SHA256:..,..;target2=..;": the targets' pre-boot fingerprints.
+BENCH_KEYS = $$(for t in $(BENCH_TARGETS); do \
+		printf '%s=%s;' $$t "$$($(BENCH_COMPOSE) exec -T $$t bench-ctl fingerprint | awk '$$1 == "preboot" {print $$3}' | paste -sd, -)"; \
+	done)
+test-app-bench: image-flutter
+	@$(BENCH_RESET)
+	@keys=$(BENCH_KEYS); \
+	$(RUN) --network luks-bench -e BENCH_PREBOOT_KEYS="$$keys" -v $(FLUTTER_HOME_VOLUME):/home/dev $(FLUTTER_IMAGE) \
+		bash -ec 'cd app; flutter pub get >/dev/null; xvfb-run -a flutter test -d linux --dart-define=BENCH=1 \
+		--dart-define=BENCH_PASSPHRASE=$(BENCH_PASS) --dart-define=BENCH_PREBOOT_KEYS="$$BENCH_PREBOOT_KEYS" \
+		integration_test/bench_run_test.dart'
+
+# The same flow on an Android emulator (needs /dev/kvm); assumes `make bench-up`. Logs go to build/android-bench.
+EMULATOR_IMAGE := luks-unlocker-emulator
+image-emulator: image-flutter
+	@docker image inspect $(EMULATOR_IMAGE) >/dev/null 2>&1 || echo "Building $(EMULATOR_IMAGE) image (downloads an Android system image)..."
+	@docker build -q $(DOCKER_BUILD_OPTS) --build-arg BASE=$(FLUTTER_IMAGE) -t $(EMULATOR_IMAGE) -f tool/Dockerfile.emulator tool >/dev/null
+
+# kvm needs a Docker daemon that sees /dev/kvm (Docker Desktop does not); off is software emulation, very slow.
+EMULATOR_ACCEL ?= kvm
+EMULATOR_DEVICE = $(if $(filter kvm,$(EMULATOR_ACCEL)),--device /dev/kvm --group-add $$(stat -c %g /dev/kvm))
+test-android-bench: image-emulator
+ifeq ($(EMULATOR_ACCEL),kvm)
+	@docker run --rm --device /dev/kvm $(EMULATOR_IMAGE) true >/dev/null 2>&1 || { \
+		echo "The Docker daemon cannot see /dev/kvm; EMULATOR_ACCEL=off runs without it, very slowly."; exit 1; }
+endif
+	@$(BENCH_RESET)
+	@keys=$(BENCH_KEYS); \
+	$(RUN) --network luks-bench $(EMULATOR_DEVICE) -e EMULATOR_ACCEL=$(EMULATOR_ACCEL) \
+		-e BENCH_PREBOOT_KEYS="$$keys" -e BENCH_PASS=$(BENCH_PASS) \
+		-v $(FLUTTER_HOME_VOLUME):/home/dev $(EMULATOR_IMAGE) bash tool/android_bench.sh
 
 bench-up:
 	docker compose -f bench/compose.yaml up -d --build

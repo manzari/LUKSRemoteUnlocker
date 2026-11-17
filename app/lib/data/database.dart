@@ -1,6 +1,8 @@
 import 'package:drift/drift.dart';
 import 'package:unlock_core/unlock_core.dart';
 
+import 'database.steps.dart';
+
 part 'database.g.dart';
 
 @DataClassName('SshKeyRow')
@@ -149,12 +151,19 @@ class RunHosts extends Table {
   TextColumn get hostName => text()();
   TextColumn get finalState => text().nullable()();
 
+  /// Order of the host within the run.
+  IntColumn get position => integer().withDefault(const Constant(0))();
+
+  /// Why the run left the host out (no key or passphrase, unreadable record).
+  TextColumn get skipReason => text().nullable()();
+
   @override
   Set<Column<Object>> get primaryKey => {runId, hostId};
 }
 
 /// Sanitized host events; messages never contain a run secret.
 @DataClassName('RunEventRow')
+@TableIndex(name: 'run_events_by_run', columns: {#runId})
 class RunEvents extends Table {
   IntColumn get id => integer().autoIncrement()();
   TextColumn get runId =>
@@ -185,11 +194,18 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase(super.e);
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
     onCreate: (m) => m.createAll(),
+    onUpgrade: stepByStep(
+      from1To2: (m, schema) async {
+        await m.addColumn(schema.runHosts, schema.runHosts.position);
+        await m.addColumn(schema.runHosts, schema.runHosts.skipReason);
+        await m.create(schema.runEventsByRun);
+      },
+    ),
     beforeOpen: (details) async {
       await customStatement('PRAGMA foreign_keys = ON');
       await customStatement('PRAGMA secure_delete = ON');

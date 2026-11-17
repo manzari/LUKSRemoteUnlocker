@@ -4,7 +4,7 @@ Unlocks LUKS-encrypted Linux servers waiting at the Dropbear pre-boot prompt, fr
 
 ## Make targets
 
-Everything runs in Docker (`tool/Dockerfile.dart`, `tool/Dockerfile.flutter`); nothing is installed on the host.
+Everything runs in Docker (`tool/Dockerfile.dart`, `tool/Dockerfile.flutter`, `tool/Dockerfile.emulator`); nothing is installed on the host.
 
 | Target | What it does |
 | --- | --- |
@@ -17,3 +17,5 @@ Everything runs in Docker (`tool/Dockerfile.dart`, `tool/Dockerfile.flutter`); n
 | `make run-dart CMD="..."` / `run-flutter CMD="..."` | One command in the toolchain container |
 | `make bench-up` / `bench-down` | Start or remove the Dropbear test bench |
 | `make test-bench` | Engine and CLI tests against the running bench |
+| `make test-app-bench` | Linux app under Xvfb unlocks the three bench targets in parallel (resets them first) |
+| `make test-android-bench` | Same flow on an Android emulator (`tool/Dockerfile.emulator`); needs a Docker daemon that sees `/dev/kvm`, `EMULATOR_ACCEL=off` runs without it, very slowly |

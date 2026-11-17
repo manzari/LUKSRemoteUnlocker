@@ -42,3 +42,11 @@ final class ReadOnlyProfileException extends DataException {
 final class NotFoundException extends DataException {
   const NotFoundException(super.message);
 }
+
+final class ImportChangedException extends DataException {
+  const ImportChangedException()
+    : super(
+        'Hosts, keys or passphrases changed since the import summary was '
+        'shown. Nothing was imported; start the import again.',
+      );
+}

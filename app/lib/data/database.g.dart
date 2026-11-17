@@ -2858,7 +2858,6 @@ class $VaultPasswordSlotTable extends VaultPasswordSlot
     'id',
     aliasedName,
     false,
-    check: () => id.equals(1),
     type: DriftSqlType.int,
     requiredDuringInsert: false,
   );
@@ -3314,7 +3313,6 @@ class $VaultMetadataTableTable extends VaultMetadataTable
     'id',
     aliasedName,
     false,
-    check: () => id.equals(1),
     type: DriftSqlType.int,
     requiredDuringInsert: false,
   );
@@ -4298,8 +4296,38 @@ class $RunHostsTable extends RunHosts
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _positionMeta = const VerificationMeta(
+    'position',
+  );
   @override
-  List<GeneratedColumn> get $columns => [runId, hostId, hostName, finalState];
+  late final GeneratedColumn<int> position = GeneratedColumn<int>(
+    'position',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(0),
+  );
+  static const VerificationMeta _skipReasonMeta = const VerificationMeta(
+    'skipReason',
+  );
+  @override
+  late final GeneratedColumn<String> skipReason = GeneratedColumn<String>(
+    'skip_reason',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    runId,
+    hostId,
+    hostName,
+    finalState,
+    position,
+    skipReason,
+  ];
   @override
   String get aliasedName => _alias ?? actualTableName;
   @override
@@ -4342,6 +4370,18 @@ class $RunHostsTable extends RunHosts
         finalState.isAcceptableOrUnknown(data['final_state']!, _finalStateMeta),
       );
     }
+    if (data.containsKey('position')) {
+      context.handle(
+        _positionMeta,
+        position.isAcceptableOrUnknown(data['position']!, _positionMeta),
+      );
+    }
+    if (data.containsKey('skip_reason')) {
+      context.handle(
+        _skipReasonMeta,
+        skipReason.isAcceptableOrUnknown(data['skip_reason']!, _skipReasonMeta),
+      );
+    }
     return context;
   }
 
@@ -4367,6 +4407,14 @@ class $RunHostsTable extends RunHosts
         DriftSqlType.string,
         data['${effectivePrefix}final_state'],
       ),
+      position: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}position'],
+      )!,
+      skipReason: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}skip_reason'],
+      ),
     );
   }
 
@@ -4381,11 +4429,19 @@ class RunHostRow extends DataClass implements Insertable<RunHostRow> {
   final String hostId;
   final String hostName;
   final String? finalState;
+
+  /// Order of the host within the run.
+  final int position;
+
+  /// Why the run left the host out (no key or passphrase, unreadable record).
+  final String? skipReason;
   const RunHostRow({
     required this.runId,
     required this.hostId,
     required this.hostName,
     this.finalState,
+    required this.position,
+    this.skipReason,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -4395,6 +4451,10 @@ class RunHostRow extends DataClass implements Insertable<RunHostRow> {
     map['host_name'] = Variable<String>(hostName);
     if (!nullToAbsent || finalState != null) {
       map['final_state'] = Variable<String>(finalState);
+    }
+    map['position'] = Variable<int>(position);
+    if (!nullToAbsent || skipReason != null) {
+      map['skip_reason'] = Variable<String>(skipReason);
     }
     return map;
   }
@@ -4407,6 +4467,10 @@ class RunHostRow extends DataClass implements Insertable<RunHostRow> {
       finalState: finalState == null && nullToAbsent
           ? const Value.absent()
           : Value(finalState),
+      position: Value(position),
+      skipReason: skipReason == null && nullToAbsent
+          ? const Value.absent()
+          : Value(skipReason),
     );
   }
 
@@ -4420,6 +4484,8 @@ class RunHostRow extends DataClass implements Insertable<RunHostRow> {
       hostId: serializer.fromJson<String>(json['hostId']),
       hostName: serializer.fromJson<String>(json['hostName']),
       finalState: serializer.fromJson<String?>(json['finalState']),
+      position: serializer.fromJson<int>(json['position']),
+      skipReason: serializer.fromJson<String?>(json['skipReason']),
     );
   }
   @override
@@ -4430,6 +4496,8 @@ class RunHostRow extends DataClass implements Insertable<RunHostRow> {
       'hostId': serializer.toJson<String>(hostId),
       'hostName': serializer.toJson<String>(hostName),
       'finalState': serializer.toJson<String?>(finalState),
+      'position': serializer.toJson<int>(position),
+      'skipReason': serializer.toJson<String?>(skipReason),
     };
   }
 
@@ -4438,11 +4506,15 @@ class RunHostRow extends DataClass implements Insertable<RunHostRow> {
     String? hostId,
     String? hostName,
     Value<String?> finalState = const Value.absent(),
+    int? position,
+    Value<String?> skipReason = const Value.absent(),
   }) => RunHostRow(
     runId: runId ?? this.runId,
     hostId: hostId ?? this.hostId,
     hostName: hostName ?? this.hostName,
     finalState: finalState.present ? finalState.value : this.finalState,
+    position: position ?? this.position,
+    skipReason: skipReason.present ? skipReason.value : this.skipReason,
   );
   RunHostRow copyWithCompanion(RunHostsCompanion data) {
     return RunHostRow(
@@ -4452,6 +4524,10 @@ class RunHostRow extends DataClass implements Insertable<RunHostRow> {
       finalState: data.finalState.present
           ? data.finalState.value
           : this.finalState,
+      position: data.position.present ? data.position.value : this.position,
+      skipReason: data.skipReason.present
+          ? data.skipReason.value
+          : this.skipReason,
     );
   }
 
@@ -4461,13 +4537,16 @@ class RunHostRow extends DataClass implements Insertable<RunHostRow> {
           ..write('runId: $runId, ')
           ..write('hostId: $hostId, ')
           ..write('hostName: $hostName, ')
-          ..write('finalState: $finalState')
+          ..write('finalState: $finalState, ')
+          ..write('position: $position, ')
+          ..write('skipReason: $skipReason')
           ..write(')'))
         .toString();
   }
 
   @override
-  int get hashCode => Object.hash(runId, hostId, hostName, finalState);
+  int get hashCode =>
+      Object.hash(runId, hostId, hostName, finalState, position, skipReason);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -4475,7 +4554,9 @@ class RunHostRow extends DataClass implements Insertable<RunHostRow> {
           other.runId == this.runId &&
           other.hostId == this.hostId &&
           other.hostName == this.hostName &&
-          other.finalState == this.finalState);
+          other.finalState == this.finalState &&
+          other.position == this.position &&
+          other.skipReason == this.skipReason);
 }
 
 class RunHostsCompanion extends UpdateCompanion<RunHostRow> {
@@ -4483,12 +4564,16 @@ class RunHostsCompanion extends UpdateCompanion<RunHostRow> {
   final Value<String> hostId;
   final Value<String> hostName;
   final Value<String?> finalState;
+  final Value<int> position;
+  final Value<String?> skipReason;
   final Value<int> rowid;
   const RunHostsCompanion({
     this.runId = const Value.absent(),
     this.hostId = const Value.absent(),
     this.hostName = const Value.absent(),
     this.finalState = const Value.absent(),
+    this.position = const Value.absent(),
+    this.skipReason = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   RunHostsCompanion.insert({
@@ -4496,6 +4581,8 @@ class RunHostsCompanion extends UpdateCompanion<RunHostRow> {
     required String hostId,
     required String hostName,
     this.finalState = const Value.absent(),
+    this.position = const Value.absent(),
+    this.skipReason = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : runId = Value(runId),
        hostId = Value(hostId),
@@ -4505,6 +4592,8 @@ class RunHostsCompanion extends UpdateCompanion<RunHostRow> {
     Expression<String>? hostId,
     Expression<String>? hostName,
     Expression<String>? finalState,
+    Expression<int>? position,
+    Expression<String>? skipReason,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -4512,6 +4601,8 @@ class RunHostsCompanion extends UpdateCompanion<RunHostRow> {
       if (hostId != null) 'host_id': hostId,
       if (hostName != null) 'host_name': hostName,
       if (finalState != null) 'final_state': finalState,
+      if (position != null) 'position': position,
+      if (skipReason != null) 'skip_reason': skipReason,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -4521,6 +4612,8 @@ class RunHostsCompanion extends UpdateCompanion<RunHostRow> {
     Value<String>? hostId,
     Value<String>? hostName,
     Value<String?>? finalState,
+    Value<int>? position,
+    Value<String?>? skipReason,
     Value<int>? rowid,
   }) {
     return RunHostsCompanion(
@@ -4528,6 +4621,8 @@ class RunHostsCompanion extends UpdateCompanion<RunHostRow> {
       hostId: hostId ?? this.hostId,
       hostName: hostName ?? this.hostName,
       finalState: finalState ?? this.finalState,
+      position: position ?? this.position,
+      skipReason: skipReason ?? this.skipReason,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -4547,6 +4642,12 @@ class RunHostsCompanion extends UpdateCompanion<RunHostRow> {
     if (finalState.present) {
       map['final_state'] = Variable<String>(finalState.value);
     }
+    if (position.present) {
+      map['position'] = Variable<int>(position.value);
+    }
+    if (skipReason.present) {
+      map['skip_reason'] = Variable<String>(skipReason.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -4560,6 +4661,8 @@ class RunHostsCompanion extends UpdateCompanion<RunHostRow> {
           ..write('hostId: $hostId, ')
           ..write('hostName: $hostName, ')
           ..write('finalState: $finalState, ')
+          ..write('position: $position, ')
+          ..write('skipReason: $skipReason, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -5023,6 +5126,10 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $RunsTable runs = $RunsTable(this);
   late final $RunHostsTable runHosts = $RunHostsTable(this);
   late final $RunEventsTable runEvents = $RunEventsTable(this);
+  late final Index runEventsByRun = Index(
+    'run_events_by_run',
+    'CREATE INDEX run_events_by_run ON run_events (run_id)',
+  );
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -5039,6 +5146,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     runs,
     runHosts,
     runEvents,
+    runEventsByRun,
   ];
   @override
   StreamQueryUpdateRules get streamUpdateRules => const StreamQueryUpdateRules([
@@ -8447,6 +8555,8 @@ typedef $$RunHostsTableCreateCompanionBuilder = RunHostsCompanion Function({
   required String hostId,
   required String hostName,
   Value<String?> finalState,
+  Value<int> position,
+  Value<String?> skipReason,
   Value<int> rowid,
 });
 typedef $$RunHostsTableUpdateCompanionBuilder = RunHostsCompanion Function({
@@ -8454,6 +8564,8 @@ typedef $$RunHostsTableUpdateCompanionBuilder = RunHostsCompanion Function({
   Value<String> hostId,
   Value<String> hostName,
   Value<String?> finalState,
+  Value<int> position,
+  Value<String?> skipReason,
   Value<int> rowid,
 });
 
@@ -8500,6 +8612,16 @@ class $$RunHostsTableFilterComposer
 
   ColumnFilters<String> get finalState => $composableBuilder(
     column: $table.finalState,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get position => $composableBuilder(
+    column: $table.position,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get skipReason => $composableBuilder(
+    column: $table.skipReason,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -8551,6 +8673,16 @@ class $$RunHostsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<int> get position => $composableBuilder(
+    column: $table.position,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get skipReason => $composableBuilder(
+    column: $table.skipReason,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   $$RunsTableOrderingComposer get runId {
     final $$RunsTableOrderingComposer composer = $composerBuilder(
       composer: this,
@@ -8592,6 +8724,14 @@ class $$RunHostsTableAnnotationComposer
 
   GeneratedColumn<String> get finalState => $composableBuilder(
     column: $table.finalState,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get position =>
+      $composableBuilder(column: $table.position, builder: (column) => column);
+
+  GeneratedColumn<String> get skipReason => $composableBuilder(
+    column: $table.skipReason,
     builder: (column) => column,
   );
 
@@ -8651,12 +8791,16 @@ class $$RunHostsTableTableManager
                 Value<String> hostId = const Value.absent(),
                 Value<String> hostName = const Value.absent(),
                 Value<String?> finalState = const Value.absent(),
+                Value<int> position = const Value.absent(),
+                Value<String?> skipReason = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => RunHostsCompanion(
                 runId: runId,
                 hostId: hostId,
                 hostName: hostName,
                 finalState: finalState,
+                position: position,
+                skipReason: skipReason,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -8665,12 +8809,16 @@ class $$RunHostsTableTableManager
                 required String hostId,
                 required String hostName,
                 Value<String?> finalState = const Value.absent(),
+                Value<int> position = const Value.absent(),
+                Value<String?> skipReason = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => RunHostsCompanion.insert(
                 runId: runId,
                 hostId: hostId,
                 hostName: hostName,
                 finalState: finalState,
+                position: position,
+                skipReason: skipReason,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0

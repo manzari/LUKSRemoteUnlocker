@@ -8,6 +8,7 @@ import 'data/key_repository.dart';
 import 'data/profile_repository.dart';
 import 'data/secret_repository.dart';
 import 'data/settings_repository.dart';
+import 'services/config_transfer.dart';
 import 'services/key_import.dart';
 import 'services/platform_services.dart';
 import 'services/run_preparation.dart';
@@ -118,5 +119,15 @@ final runPreparationProvider = Provider(
     ref.watch(secretRepositoryProvider),
     ref.watch(profileRepositoryProvider),
     ref.watch(vaultStoreProvider),
+  ),
+);
+
+final configTransferProvider = Provider(
+  (ref) => ConfigTransfer(
+    ref.watch(databaseProvider),
+    ref.watch(hostRepositoryProvider),
+    ref.watch(keyRepositoryProvider),
+    ref.watch(secretRepositoryProvider),
+    ref.watch(profileRepositoryProvider),
   ),
 );

@@ -1,4 +1,4 @@
-package cc.b0t.luksremoteunlocker
+package dev.manzari.luksremoteunlocker
 
 import android.os.Bundle
 import android.view.WindowManager

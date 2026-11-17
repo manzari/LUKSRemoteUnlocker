@@ -1,5 +1,6 @@
 import 'package:material_ui/material_ui.dart';
 
+import 'history/history_screen.dart';
 import 'hosts/hosts_screen.dart';
 import 'keys/keys_screen.dart';
 import 'profiles/profiles_screen.dart';
@@ -20,6 +21,7 @@ class _Destination {
 
 const _destinations = [
   _Destination('Hosts', Icons.dns_outlined, Icons.dns, HostsScreen()),
+  _Destination('History', Icons.history, Icons.history, HistoryScreen()),
   _Destination('Keys', Icons.key_outlined, Icons.key, KeysScreen()),
   _Destination(
     'Passphrases',

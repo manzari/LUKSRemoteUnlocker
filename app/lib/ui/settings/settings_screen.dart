@@ -6,12 +6,22 @@ import 'package:material_ui/material_ui.dart';
 import 'package:unlock_core/unlock_core.dart';
 
 import '../../providers.dart';
+import '../../services/config_transfer.dart';
 import '../../vault/vault_controller.dart';
 import '../../version.dart';
 import '../common/messages.dart';
 import '../common/password_fields.dart';
 import '../help/setup_help_screen.dart';
 import '../vault/unlock.dart';
+import 'import_summary_dialog.dart';
+
+/// `luks-unlocker-config-2026-11-16.json`
+String exportFileName(DateTime d) =>
+    'luks-unlocker-config-${d.year}-${d.month.toString().padLeft(2, '0')}-'
+    '${d.day.toString().padLeft(2, '0')}.json';
+
+/// "1 host", "2 hosts".
+String countOf(int n, String noun) => '$n $noun${n == 1 ? '' : 's'}';
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -106,6 +116,59 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     if (ok && mounted) {
       await _run(_controller.removePassword, done: 'Recovery password removed');
     }
+  }
+
+  Future<void> _export() async {
+    final transfer = ref.read(configTransferProvider);
+    final services = ref.read(platformServicesProvider);
+    await _busyRun(() async {
+      final export = await transfer.export();
+      final saved = await services.saveConfigFile(
+        exportFileName(DateTime.now()),
+        export.bytes,
+      );
+      if (!saved || !mounted) return;
+      final skipped = export.unreadable == 0
+          ? ''
+          : ' ${countOf(export.unreadable, 'unreadable host')} left out.';
+      showMessage(
+        context,
+        'Exported ${countOf(export.hosts, 'host')} and '
+        '${countOf(export.profiles, 'profile')}.$skipped',
+      );
+    });
+  }
+
+  Future<void> _import() async {
+    final transfer = ref.read(configTransferProvider);
+    final ImportPlan plan;
+    try {
+      final file = await ref.read(platformServicesProvider).pickConfigFile();
+      if (file == null) return;
+      plan = await transfer.preview(file.bytes);
+    } on Object catch (e) {
+      if (mounted) {
+        await inform(
+          context,
+          title: 'Cannot import this file',
+          message: describeError(e),
+        );
+      }
+      return;
+    }
+    if (!mounted) return;
+    final trustPins = await showImportSummary(context, plan);
+    if (trustPins == null || !mounted) return;
+    await _busyRun(() async {
+      final added = await transfer.apply(plan, trustPins: trustPins);
+      final profiles = plan.newProfiles.length;
+      if (!mounted) return;
+      showMessage(
+        context,
+        'Imported ${countOf(added, 'host')}'
+        '${profiles == 0 ? '' : ' and ${countOf(profiles, 'profile')}'}.',
+      );
+    });
   }
 
   Future<void> _reset() async {
@@ -236,17 +299,23 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               onTap: _reset,
             ),
             const _Header('Configuration'),
-            const ListTile(
-              enabled: false,
-              leading: Icon(Icons.upload_file),
-              title: Text('Export configuration'),
-              subtitle: Text('Hosts and profiles without secrets; coming soon'),
+            ListTile(
+              leading: const Icon(Icons.upload_file),
+              title: const Text('Export configuration'),
+              subtitle: const Text(
+                'Hosts and custom profiles. Keys and passphrases are only '
+                'named, never included.',
+              ),
+              onTap: _export,
             ),
-            const ListTile(
-              enabled: false,
-              leading: Icon(Icons.download),
-              title: Text('Import configuration'),
-              subtitle: Text('Coming soon'),
+            ListTile(
+              leading: const Icon(Icons.download),
+              title: const Text('Import configuration'),
+              subtitle: const Text(
+                'Adds the hosts of an export. Hosts already here are never '
+                'changed.',
+              ),
+              onTap: _import,
             ),
             const _Header('Help'),
             ListTile(

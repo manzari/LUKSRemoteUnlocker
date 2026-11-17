@@ -57,6 +57,20 @@ final class HostRepository {
   Future<void> setPostbootKey(String id, HostKey? key) =>
       _patch(id, HostsCompanion(postbootKeyJson: Value(_keyJson(key))));
 
+  /// Pins a key accepted in a run; false when a key is pinned already, which a run never replaces.
+  Future<bool> pinPrebootKeyIfUnset(String id, HostKey key) async =>
+      await (_db.update(_db.hosts)
+            ..where((h) => h.id.equals(id) & h.prebootKeyJson.isNull()))
+          .write(HostsCompanion(prebootKeyJson: Value(_keyJson(key)))) >
+      0;
+
+  /// Records the first post-boot key a run saw; false when one is recorded already.
+  Future<bool> recordPostbootKeyIfUnset(String id, HostKey key) async =>
+      await (_db.update(_db.hosts)
+            ..where((h) => h.id.equals(id) & h.postbootKeyJson.isNull()))
+          .write(HostsCompanion(postbootKeyJson: Value(_keyJson(key)))) >
+      0;
+
   // The names* lookups read raw rows, so unreadable hosts still block deleting what they reference.
   Future<List<String>> namesUsingKey(String keyId) async => [
     for (final r in await _rows())

@@ -206,6 +206,14 @@ final class _FakeKeyStore implements VaultKeyStore {
 final class FakePlatformServices implements PlatformServices {
   PickedFile? nextFile;
   final shared = <String>[];
+  PickedFile? nextConfigFile;
+
+  /// When set, picking a config file throws it.
+  Exception? pickConfigError;
+
+  /// False acts like a cancelled save dialog.
+  bool saveConfirmed = true;
+  final savedConfigs = <PickedFile>[];
 
   @override
   Future<PickedFile?> pickKeyFile() async => nextFile;
@@ -213,6 +221,18 @@ final class FakePlatformServices implements PlatformServices {
   @override
   Future<void> sharePublicKey(String line, {required String subject}) async =>
       shared.add(line);
+
+  @override
+  Future<PickedFile?> pickConfigFile() async {
+    if (pickConfigError case final e?) throw e;
+    return nextConfigFile;
+  }
+
+  @override
+  Future<bool> saveConfigFile(String fileName, Uint8List bytes) async {
+    if (saveConfirmed) savedConfigs.add((name: fileName, bytes: bytes));
+    return saveConfirmed;
+  }
 }
 
 final class TestApp {
