@@ -27,7 +27,7 @@ void main() {
       (tester) async {
         final app = await pumpApp(tester);
         final secrets = SecretRepository(app.db, HostRepository(app.db));
-        await openTab(tester, 'Passphrases');
+        await openTab(tester, 'Credentials');
         await tester.tap(find.text('Add passphrase'));
         await tester.pumpAndSettle();
 
@@ -73,7 +73,7 @@ void main() {
           label: 'data disk',
           passphrase: bytesOf('FAKE-old'),
         );
-        await openTab(tester, 'Passphrases');
+        await openTab(tester, 'Credentials');
         await tester.tap(find.text('data disk'));
         await tester.pumpAndSettle();
 
@@ -127,7 +127,7 @@ void main() {
           diskOverrides: {'sdb': s.id},
         ),
       );
-      await openTab(tester, 'Passphrases');
+      await openTab(tester, 'Credentials');
       expect(find.text('Used by 1 host'), findsOneWidget);
       await tester.tap(find.text('data disk'));
       await tester.pumpAndSettle();
@@ -151,7 +151,10 @@ void main() {
       tester,
     ) async {
       final app = await pumpApp(tester);
-      await openTab(tester, 'Profiles');
+      await openTab(tester, 'Settings');
+      await tester.scrollUntilVisible(find.text('Unlock profiles'), 200);
+      await tester.tap(find.text('Unlock profiles'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text(UnlockProfile.debian.name));
       await tester.pumpAndSettle();
       expect(

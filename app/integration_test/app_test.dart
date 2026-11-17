@@ -48,7 +48,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Add host'), findsOneWidget);
 
-    await tester.tap(find.text('Passphrases').first);
+    await tester.tap(find.text('Credentials').first);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Add passphrase'));
     await tester.pumpAndSettle();
@@ -72,7 +72,7 @@ void main() {
     expect(find.text('Set up the vault'), findsNothing);
     expect(find.byTooltip('Unlock vault'), findsOneWidget);
 
-    await tester.tap(find.text('Passphrases').first);
+    await tester.tap(find.text('Credentials').first);
     await tester.pumpAndSettle();
     await tester.tap(find.text('root'));
     await tester.pumpAndSettle();

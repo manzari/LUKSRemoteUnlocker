@@ -13,7 +13,7 @@ const _fixtureFingerprint =
     'SHA256:TEvtlX/GczN0Jf70vMKaeCELsAQ3MJIrRfoKEG+DgbM';
 
 Future<void> openAdd(WidgetTester tester, String choice) async {
-  await openTab(tester, 'Keys');
+  await openTab(tester, 'Credentials');
   await tester.tap(find.text('Add key'));
   await tester.pumpAndSettle();
   await tester.tap(find.text(choice));
@@ -224,7 +224,7 @@ void main() {
         keyId: key.id,
       ),
     );
-    await openTab(tester, 'Keys');
+    await openTab(tester, 'Credentials');
     await tester.tap(find.text('laptop'));
     await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('Delete key'));

@@ -12,6 +12,7 @@ import '../../version.dart';
 import '../common/messages.dart';
 import '../common/password_fields.dart';
 import '../help/setup_help_screen.dart';
+import '../profiles/profiles_screen.dart';
 import '../vault/unlock.dart';
 import 'import_summary_dialog.dart';
 
@@ -317,6 +318,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ),
               onTap: _import,
             ),
+            ListTile(
+              leading: const Icon(Icons.terminal),
+              title: const Text('Unlock profiles'),
+              subtitle: const Text('Commands used to unlock a server'),
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute<void>(builder: (_) => const ProfilesScreen()),
+              ),
+            ),
             const _Header('Help'),
             ListTile(
               leading: const Icon(Icons.help_outline),
@@ -339,6 +349,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 context: context,
                 applicationName: 'LUKS Remote Unlocker',
                 applicationVersion: appVersion,
+                applicationIcon: Image.asset(
+                  'assets/logo.png',
+                  width: 56,
+                  height: 56,
+                ),
                 applicationLegalese:
                     'Works offline. No cloud, no telemetry, no analytics.',
               ),

@@ -228,7 +228,7 @@ void main() {
     testWidgets('locks after 2 minutes without input', (tester) async {
       final app = await pumpApp(tester);
       await tester.pump(const Duration(seconds: 100));
-      await tester.tap(find.text('Keys').first);
+      await tester.tap(find.text('Credentials').first);
       await tester.pump(const Duration(seconds: 100));
       expect(app.status.isUnlocked, isTrue);
       await tester.pump(const Duration(seconds: 21));
@@ -249,9 +249,8 @@ void main() {
       expect(find.byType(NavigationRail), findsNothing);
       for (final (tab, title) in [
         ('History', 'Run history'),
-        ('Keys', 'SSH keys'),
-        ('Passphrases', 'Disk passphrases'),
-        ('Profiles', 'Unlock profiles'),
+        ('Credentials', 'SSH keys'),
+        ('Credentials', 'Disk passphrases'),
         ('Settings', 'Vault'),
         ('Hosts', 'Add host'),
       ]) {
