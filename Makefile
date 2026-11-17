@@ -23,10 +23,10 @@ IN_DART_TTY = $(RUN) -it -v $(DART_HOME_VOLUME):/home/dev $(DART_IMAGE)
 IN_FLUTTER_TTY = $(RUN) -it -v $(FLUTTER_HOME_VOLUME):/home/dev $(FLUTTER_IMAGE)
 
 .PHONY: help images image-dart image-flutter image-emulator test test-core test-cli test-app test-bench test-app-bench \
-	test-android-bench cli apk linux icons shell-dart shell-flutter run-dart run-flutter bench-up bench-down clean
+	test-android-bench cli apk apk-release aab linux icons shell-dart shell-flutter run-dart run-flutter bench-up bench-down clean require-signing
 
 help:
-	@echo "Targets: test test-core test-cli test-app test-bench test-app-bench test-android-bench cli apk linux icons"
+	@echo "Targets: test test-core test-cli test-app test-bench test-app-bench test-android-bench cli apk apk-release aab linux icons"
 	@echo "         shell-dart shell-flutter run-dart CMD=... run-flutter CMD=... bench-up bench-down images clean"
 
 images: image-dart image-flutter
@@ -55,6 +55,18 @@ cli: image-dart
 
 apk: image-flutter
 	$(IN_FLUTTER) bash -ec 'cd app; flutter build apk --debug'
+
+# Release builds refuse to run without the signing config, which would fall back to the debug key.
+KEY_PROPERTIES := app/android/key.properties
+require-signing:
+	@test -f $(KEY_PROPERTIES) || { echo "$(KEY_PROPERTIES) is missing; see app/android/app/build.gradle.kts."; exit 1; }
+
+apk-release: image-flutter require-signing
+	$(IN_FLUTTER) bash -ec 'cd app; flutter build apk --release'
+
+# Play Store upload: app/build/app/outputs/bundle/release/app-release.aab
+aab: image-flutter require-signing
+	$(IN_FLUTTER) bash -ec 'cd app; flutter build appbundle --release'
 
 linux: image-flutter
 	$(IN_FLUTTER) bash -ec 'cd app; flutter build linux --debug'

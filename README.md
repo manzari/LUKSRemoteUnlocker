@@ -12,6 +12,8 @@ Everything runs in Docker (`tool/Dockerfile.dart`, `tool/Dockerfile.flutter`, `t
 | `make test-core` / `test-cli` / `test-app` | Same for one package; `ARGS="test/x_test.dart"` narrows the run |
 | `make cli` | Builds `build/luks-unlock` |
 | `make apk` | Debug Android APK |
+| `make apk-release` | Signed release APK; needs `app/android/key.properties` |
+| `make aab` | Signed release app bundle for the Play Store; needs `app/android/key.properties` |
 | `make linux` | Debug Linux desktop build |
 | `make shell-dart` / `shell-flutter` | Interactive shell in the toolchain container |
 | `make run-dart CMD="..."` / `run-flutter CMD="..."` | One command in the toolchain container |

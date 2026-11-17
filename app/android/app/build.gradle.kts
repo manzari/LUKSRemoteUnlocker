@@ -29,7 +29,6 @@ android {
     }
 
     defaultConfig {
-        // Placeholder application id; final id still to be decided.
         applicationId = "dev.manzari.luksremoteunlocker"
         // biometric_vault needs API 24.
         minSdk = 24
