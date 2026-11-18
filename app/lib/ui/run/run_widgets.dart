@@ -6,6 +6,7 @@ import '../../data/run_repository.dart';
 String phaseLabel(HostPhase? phase) => switch (phase) {
   null => 'Starting',
   HostPhase.checkingIfUp => 'Checking if up',
+  HostPhase.pinging => 'Pinging',
   HostPhase.waitingForPreboot => 'Waiting for pre-boot',
   HostPhase.verifyingHostKey => 'Verifying host key',
   HostPhase.authenticating => 'Logging in',

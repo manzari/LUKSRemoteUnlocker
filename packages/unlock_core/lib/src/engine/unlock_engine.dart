@@ -163,6 +163,9 @@ final class _HostRun implements RunLog {
   var _finished = false;
   _Gate _gate = _Gate();
   String? _lastCheckNote;
+
+  /// Pre-boot addresses already logged as not answering.
+  final _silent = <Endpoint>{};
   final _connections = <SshConnection>[];
 
   Host get host => plan.host;
@@ -225,10 +228,7 @@ final class _HostRun implements RunLog {
     }
 
     final deadline = now.add(host.waitTimeout);
-    _emit(
-      'waiting for pre-boot SSH at ${host.preboot.join(', ')}',
-      phase: HostPhase.waitingForPreboot,
-    );
+    _emit('pinging ${host.preboot.join(', ')}', phase: HostPhase.pinging);
     SshConnection? conn;
     Endpoint? endpoint;
     while (conn == null || endpoint == null) {
@@ -418,7 +418,18 @@ final class _HostRun implements RunLog {
         final open = await control.guard(
           engine.reachability.tcpOpen(e.host, e.port, timings.tcpTimeout),
         );
-        if (open) return e;
+        if (open) {
+          _silent.remove(e);
+          _emit('$e answers');
+          return e;
+        }
+        if (_silent.add(e)) _emit('$e does not answer');
+      }
+      if (_phase == HostPhase.pinging) {
+        _emit(
+          'waiting for pre-boot SSH at ${host.preboot.join(', ')}',
+          phase: HostPhase.waitingForPreboot,
+        );
       }
       final left = deadline.difference(now);
       if (left <= Duration.zero) return null;

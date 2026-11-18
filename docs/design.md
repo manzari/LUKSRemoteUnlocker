@@ -94,7 +94,7 @@ One state machine per host. The passphrase is sent only after the server's host 
 | # | State | What happens | Exits |
 | --- | --- | --- | --- |
 | 1 | Checking if up | One post-boot check (see below), 3 s timeout. | Passes → **Already up** |
-| 2 | Waiting for pre-boot | TCP connect to each pre-boot address in order, 3 s timeout each. Repeat every 2 s, backing off to 5 s, until the wait timeout (default 10 min). | Timeout → **Pre-boot timeout** |
+| 2 | Pinging, then waiting for pre-boot | Ping: one TCP connect to each pre-boot address in order, 3 s timeout each; the log says which address answers. No answer: waiting for pre-boot repeats the ping every 2 s, backing off to 5 s, until the wait timeout (default 10 min). | Timeout → **Pre-boot timeout** |
 | 3 | Verifying host key | SSH key exchange. Compare the server key with the pinned one. Not pinned yet: pause this host and ask the user to confirm the SHA-256 fingerprint (other hosts keep running). | Differs → **Host key mismatch**. Equals the known post-boot key → **Already up**. Declined → **Cancelled** |
 | 4 | Authenticating | Public-key login with the assigned key. | Rejected → **Auth failed** |
 | 5 | Unlocking disk *n* | Open an exec channel without a pseudo-terminal, run the profile command, read `Please unlock disk <name>` from stdout, write the passphrase for that disk to stdin, close stdin, wait for the exit code (30 s timeout). | See result table |

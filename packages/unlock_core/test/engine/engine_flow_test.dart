@@ -147,6 +147,40 @@ void main() {
       expect(w.clock.elapsed, greaterThan(const Duration(seconds: 30)));
     });
 
+    test('the ping is its own step and logs each address once', () async {
+      final w = World()..server.prebootDelay = const Duration(seconds: 30);
+      final events = await runAll(w.engine(), [w.plan(w.host())]);
+      final e = w.server.preboot.single;
+      expect(
+        events.map((x) => (x.phase, x.message)),
+        containsAllInOrder([
+          (HostPhase.pinging, 'pinging $e'),
+          (HostPhase.pinging, '$e does not answer'),
+          (HostPhase.waitingForPreboot, 'waiting for pre-boot SSH at $e'),
+          (HostPhase.waitingForPreboot, '$e answers'),
+        ]),
+      );
+      expect(
+        events.where((x) => x.message == '$e does not answer'),
+        hasLength(1),
+      );
+    });
+
+    test(
+      'a server that answers the ping never enters the waiting step',
+      () async {
+        final w = World();
+        final events = await runAll(w.engine(), [w.plan(w.host())]);
+        final e = w.server.preboot.single;
+        expect(resultOf(events), FinalState.unlocked, reason: messages(events));
+        expect(events.map((x) => x.message), contains('$e answers'));
+        expect(
+          events.map((x) => x.phase),
+          isNot(contains(HostPhase.waitingForPreboot)),
+        );
+      },
+    );
+
     test('fallback addresses are tried in order', () async {
       final w = World();
       final a = w.server.preboot.first;

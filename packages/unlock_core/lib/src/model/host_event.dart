@@ -5,6 +5,7 @@ import 'host_key.dart';
 /// Where a host is in the unlock flow.
 enum HostPhase {
   checkingIfUp('checking-if-up'),
+  pinging('pinging'),
   waitingForPreboot('waiting-for-preboot'),
   verifyingHostKey('verifying-host-key'),
   authenticating('authenticating'),
