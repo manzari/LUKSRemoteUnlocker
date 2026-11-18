@@ -1,6 +1,6 @@
 import 'package:material_ui/material_ui.dart';
 
-/// Static server-side advice from the plan (docs/server-setup.md).
+/// Static server-side advice, the same as docs/server-setup.md.
 class SetupHelpScreen extends StatelessWidget {
   const SetupHelpScreen({super.key});
 
