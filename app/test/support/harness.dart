@@ -267,10 +267,11 @@ Future<TestApp> pumpApp(
   BiometricSlotPlatform biometrics = const NoBiometricSlot(),
   bool setUpVault = true,
   Size size = const Size(1000, 2400),
+  double devicePixelRatio = 1,
   List<Override> overrides = const [],
 }) async {
   tester.view.physicalSize = size;
-  tester.view.devicePixelRatio = 1;
+  tester.view.devicePixelRatio = devicePixelRatio;
   addTearDown(tester.view.reset);
   final db = memoryDatabase();
   final services = FakePlatformServices();

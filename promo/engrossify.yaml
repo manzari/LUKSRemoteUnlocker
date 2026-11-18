@@ -1,0 +1,87 @@
+# Tenant config for the engrossify render API; the apppage build posts it to
+# $ENGROSSIFY_URL/api/render and gets the privacy policy and the terms back.
+#
+# DRAFT: legal_check_done is false, so every render carries the review banners.
+# Resolve the TODOs and have the output reviewed before setting it to true.
+
+slug: luksremoteunlocker
+name: LUKS Remote Unlocker
+languages: [en]
+documents: [privacy, terms-of-service]
+# TODO: confirm. The app is free and offered to anyone, consumers included.
+audience: both
+legal_check_done: false
+
+controller:
+  name: Marco Manzari
+  legal_form: Kleingewerbe
+  address:
+    street: c/o COCENTER, Koppoldstr. 1
+    postal_code: "86551"
+    city: Aichach
+    country: DE
+  email: mail@manzari.dev
+  phone: "+49 30 55570662"
+
+supervisory_authority:
+  # TODO: confirm. Copied from the other manzari.dev pages, which carry the same
+  # open question: the address is in Bayern, the key says Berlin.
+  key: berlin
+
+site:
+  url: https://luksremoteunlocker.manzari.dev
+  # TODO: confirm the host this page is deployed on.
+  hosting_provider: Hetzner Online GmbH
+  hosting_country: DE
+  fonts_self_hosted: true
+
+data_flows:
+  # Static page: no cookies, no client-side storage, no third-party requests.
+  cookies:
+    enabled: false
+  hosting:
+    enabled: true
+  mobile:
+    enabled: true
+    platforms: [android, ios]
+    push_enabled: false
+    # Checked against app/pubspec.yaml and the sources: no analytics, crash
+    # reporting, ads or attribution SDK, and no network endpoint other than the
+    # SSH servers the user enters.
+    sdk_list: []
+
+# No sign-up and no backend. Fingerprint and face checks are done by the
+# device; the app and the provider never receive biometric data.
+user_accounts:
+  enabled: false
+
+processors:
+  - name: Hetzner Online GmbH
+    purpose: Hosting of the landing page (static site, server logs)
+    country: DE
+    avv_url: https://www.hetzner.com/AV/DPA_de.pdf
+
+retention:
+  # TODO: confirm against the actual proxy log configuration.
+  server_logs_days: 14
+
+art21_objection:
+  applicable: true
+  contact: mail@manzari.dev
+
+terms:
+  service_description: >-
+    LUKS Remote Unlocker is a free, open-source app (MIT license) for Android,
+    Linux desktop and the command line. It unlocks LUKS-encrypted Linux servers
+    that wait at the Dropbear pre-boot SSH prompt: it connects to the servers
+    the user has entered, checks each server's pinned SSH host key, logs in
+    with the SSH key assigned to that server, sends the disk passphrase and
+    checks that the server has booted. Servers, SSH keys, passphrases and the
+    run history are stored only on the user's device; private keys and
+    passphrases are kept in an encrypted vault. The app has no user accounts
+    and no backend, and it sends nothing to the provider or to any third
+    party. The user is responsible for the servers they connect to and for
+    keeping their own copies of keys and passphrases.
+  governing_law: DE
+  jurisdiction: Berlin
+  # No contract_type: the app is free, so price, delivery and warranty clauses are not rendered.

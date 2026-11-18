@@ -1,0 +1,129 @@
+/* Colours from docs/logo.svg: navy tile, amber padlock, teal signal. */
+:root {
+  --navy: #22355c;
+  --navy-deep: #0e1730;
+  --ink: #14203f;
+  --amber: #f5b83d;
+  --amber-light: #ffcc66;
+  --teal: #7fd6c2;
+  --teal-ink: #1c7a68;
+}
+
+/* Below Bulma's desktop width the container has no gutter and its columns overflow the viewport. */
+@media screen and (max-width: 1023px) {
+  .hero-section .container,
+  .features-section .container,
+  .screenshots-section .container,
+  .cta-section .container,
+  .footer-section .container {
+    padding-left: 1.25rem;
+    padding-right: 1.25rem;
+  }
+}
+
+.navbar-brand .navbar-item:first-child {
+  display: inline-flex;
+  align-items: center;
+}
+
+.navbar-brand .navbar-item:first-child::before {
+  content: "";
+  width: 1.9rem;
+  height: 1.9rem;
+  margin-right: 0.65rem;
+  background: url("../images/favicon.svg") center / contain no-repeat;
+}
+
+.hero-section {
+  background: linear-gradient(135deg, var(--navy) 0%, var(--navy-deep) 100%);
+}
+
+.hero-section::before {
+  background: radial-gradient(ellipse, rgba(127, 214, 194, 0.14) 0%, transparent 70%);
+}
+
+.hero-section::after {
+  background: radial-gradient(ellipse, rgba(0, 0, 0, 0.25) 0%, transparent 70%);
+}
+
+.store-button {
+  background: var(--amber);
+  border-color: transparent;
+  color: var(--ink);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.store-button:hover {
+  background: var(--amber-light);
+  border-color: transparent;
+  color: var(--ink);
+}
+
+.section-tag {
+  background-image: linear-gradient(135deg, var(--navy) 0%, var(--teal-ink) 100%);
+}
+
+.section-title,
+.feature-box h3 {
+  color: var(--ink);
+}
+
+.feature-icon {
+  background: linear-gradient(135deg, var(--navy) 0%, var(--navy-deep) 100%);
+  box-shadow: 0 10px 30px -10px rgba(14, 23, 48, 0.55);
+}
+
+.feature-icon i {
+  color: var(--amber);
+}
+
+.cta-section {
+  background: linear-gradient(135deg, var(--navy) 0%, var(--navy-deep) 100%);
+}
+
+.cta-section::before {
+  background: radial-gradient(ellipse, rgba(127, 214, 194, 0.12) 0%, transparent 60%);
+}
+
+.cta-button.is-fdroid {
+  background: var(--amber);
+  color: var(--ink);
+}
+
+.cta-button.is-fdroid:hover {
+  background: var(--amber-light);
+  box-shadow: 0 15px 40px rgba(245, 184, 61, 0.3);
+  color: var(--ink);
+}
+
+.footer-section {
+  background: #0a1124;
+}
+
+.legal-content a {
+  color: var(--teal-ink);
+}
+
+.legal-content a:hover {
+  color: var(--navy);
+}
+
+.legal-content .callout,
+.legal-content .art21 {
+  border-left-color: var(--teal-ink);
+  background: #f2f8f6;
+}
+
+.button.is-primary,
+.button.is-primary:hover,
+.button.is-primary:focus {
+  background-color: var(--navy);
+  color: #ffffff;
+}
+
+.store-button:focus-visible,
+.cta-button:focus-visible {
+  outline: 3px solid var(--teal);
+  outline-offset: 3px;
+}

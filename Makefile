@@ -23,11 +23,13 @@ IN_DART_TTY = $(RUN) -it -v $(DART_HOME_VOLUME):/home/dev $(DART_IMAGE)
 IN_FLUTTER_TTY = $(RUN) -it -v $(FLUTTER_HOME_VOLUME):/home/dev $(FLUTTER_IMAGE)
 
 .PHONY: help images image-dart image-flutter image-emulator test test-core test-cli test-app test-bench test-app-bench \
-	test-android-bench cli apk apk-release aab linux icons shell-dart shell-flutter run-dart run-flutter bench-up bench-down clean require-signing
+	test-android-bench cli apk apk-release aab linux icons shell-dart shell-flutter run-dart run-flutter bench-up bench-down clean require-signing \
+	promo promo-up promo-shots
 
 help:
 	@echo "Targets: test test-core test-cli test-app test-bench test-app-bench test-android-bench cli apk apk-release aab linux icons"
 	@echo "         shell-dart shell-flutter run-dart CMD=... run-flutter CMD=... bench-up bench-down images clean"
+	@echo "         promo promo-up promo-shots"
 
 images: image-dart image-flutter
 
@@ -141,6 +143,26 @@ bench-up:
 
 bench-down:
 	docker compose -f bench/compose.yaml down -v
+
+# Landing page: promo/ is the content, the apppage engine renders it; deploys use promo/compose.yaml.
+# APPPAGE is a checkout of the engine (git.hauptstadt.monster/manzari/apppage).
+APPPAGE ?= ../apppage
+PROMO_IMAGE := luks-unlocker-promo
+PROMO_PORT ?= 8888
+
+# Local preview image; its privacy policy and terms are placeholders.
+promo:
+	docker build -q $(DOCKER_BUILD_OPTS) -t $(PROMO_IMAGE) --build-context engine=$(APPPAGE) \
+		--build-arg ALLOW_PLACEHOLDER_LEGAL=1 promo
+
+promo-up: promo
+	@echo "http://localhost:$(PROMO_PORT)"
+	docker run --rm -p 127.0.0.1:$(PROMO_PORT):80 $(PROMO_IMAGE)
+
+# Android blocks screenshots of the app, so the widget tests render its screens into promo/images.
+promo-shots: image-flutter
+	$(IN_FLUTTER) bash -ec 'cd app; flutter test --dart-define=PROMO_SHOTS=1 test/promo/promo_screenshots_test.dart'
+	docker run --rm -e HOST_UID=$(HOST_UID) -e HOST_GID=$(HOST_GID) -v "$(CURDIR)":/work -w /work alpine:3.22 tool/promo_webp.sh
 
 clean:
 	rm -rf build app/build

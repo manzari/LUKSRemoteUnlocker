@@ -1,0 +1,40 @@
+# Coolify: Docker Compose build pack, base directory /promo, this file as the
+# compose file. Set the domain on the `web` service.
+#
+# Environment variables to set there:
+#   ENGROSSIFY_API_KEY  key for the legal render
+#   GIT_AUTH_TOKEN      Forgejo access token that can read manzari/apppage
+
+services:
+  web:
+    build:
+      context: .
+      additional_contexts:
+        # The apppage engine, at the tip of its `engine` branch. Pin a commit
+        # with "...apppage.git#<sha>", or point at a local checkout.
+        engine: "${APPPAGE_ENGINE:-https://git.hauptstadt.monster/manzari/apppage.git#engine}"
+      args:
+        ENGROSSIFY_URL: "${ENGROSSIFY_URL:-https://legal.guestlist.ink}"
+        # Bump to render the legal pages again when only the remote templates changed.
+        LEGAL_RENDER_VERSION: "${LEGAL_RENDER_VERSION:-1}"
+      secrets:
+        - engrossify_api_key
+        # BuildKit uses a secret with this id to fetch private git contexts.
+        - GIT_AUTH_TOKEN
+    expose:
+      - "80"
+    environment:
+      - SERVICE_FQDN_WEB_80
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+secrets:
+  engrossify_api_key:
+    environment: ENGROSSIFY_API_KEY
+  GIT_AUTH_TOKEN:
+    environment: GIT_AUTH_TOKEN

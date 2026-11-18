@@ -1,0 +1,118 @@
+code: en
+label: English
+short: EN
+
+meta:
+  description: Unlock LUKS-encrypted Linux servers that wait at the Dropbear pre-boot prompt, from your phone. Host keys are pinned, the boot is confirmed, and nothing leaves the device.
+  tagline: Remote unlock for LUKS-encrypted servers.
+
+nav:
+  features: Features
+  screenshots: Screenshots
+  download: Download
+  language_switch_aria: Switch language
+
+hero:
+  title: "Unlock LUKS servers from your phone."
+  subtitle: "After a reboot, an encrypted server waits at the Dropbear pre-boot prompt. LUKS Remote Unlocker sends the passphrase, one tap per server or all at once, and checks that each one really booted."
+  screenshot_1:
+    icon: "fas fa-server"
+    label: "A run over three servers, each with its own live log"
+    image: "/assets/images/run-dark.webp"
+  screenshot_2:
+    icon: "fas fa-server"
+    label: "The list of servers, grouped"
+    image: "/assets/images/hosts-dark.webp"
+
+features:
+  tag: "Features"
+  title: "Careful with your passphrase"
+  subtitle: "A passphrase is only as safe as the server it is sent to, so the app checks before it sends and confirms after."
+  items:
+    - icon: "fas fa-server"
+      title: "One tap, many servers"
+      description: "Unlock one host, a group or all of them. Hosts run in parallel, each with its own live log, and a run keeps going with the screen off."
+    - icon: "fas fa-shield-halved"
+      title: "Pinned host keys"
+      description: "The passphrase is sent only after the server's pre-boot key matches the pinned one. A changed key stops that host before login, and a run has no way to accept it anyway."
+    - icon: "fas fa-circle-check"
+      title: "Boot confirmed"
+      description: "An unlock counts as done only when the booted system answers with a different SSH host key than the pre-boot one."
+    - icon: "fas fa-fingerprint"
+      title: "Encrypted vault"
+      description: "SSH keys and passphrases are encrypted with XChaCha20-Poly1305. A fingerprint or face opens the vault through the phone's secure hardware, and a recovery password is the second way in."
+    - icon: "fas fa-ban"
+      title: "No blind retries"
+      description: "Debian allows three passphrase tries by default. A rejected passphrase stops the host, so the app never spends a try on its own."
+    - icon: "fas fa-eye-slash"
+      title: "Nothing leaves the device"
+      description: "No accounts, no telemetry, no cloud. The app talks only to the servers you configure, and passphrases are stripped from every log."
+
+screenshots:
+  tag: "Screenshots"
+  title: "From setup to a booted server"
+  subtitle: "Works with Debian and Ubuntu servers that run Dropbear in their initramfs."
+  items:
+    - icon: "fas fa-pen"
+      label: "The form for a server: addresses, SSH key and passphrase"
+      image: "/assets/images/host-form-light.webp"
+    - icon: "fas fa-key"
+      label: "An SSH key with its public line and QR code"
+      image: "/assets/images/key-light.webp"
+    - icon: "fas fa-server"
+      label: "The list of servers, grouped"
+      image: "/assets/images/hosts-light.webp"
+    - icon: "fas fa-shield-halved"
+      label: "Confirming a new host key by its fingerprint"
+      image: "/assets/images/host-key-light.webp"
+    - icon: "fas fa-list-check"
+      label: "A run over three servers, each with its own live log"
+      image: "/assets/images/run-light.webp"
+
+cta:
+  title: "Get the app"
+  subtitle: "For Android 7.0 and later, from the manzari.dev F-Droid repository. Add the repository in your F-Droid client, then install the app from there."
+
+store_buttons:
+  webapp:
+    small: "Open the"
+    label: "Web App"
+  appstore:
+    small: "Download on the"
+    label: "App Store"
+  playstore:
+    small: "Get it on"
+    label: "Google Play"
+  fdroid:
+    small: "Add the repo in"
+    label: "F-Droid"
+  contact:
+    small: "Questions?"
+    label: "Get in touch"
+  coming_soon:
+    small: "Stay tuned"
+    label: "Coming soon"
+
+cta_buttons:
+  webapp: "Open the web app"
+  appstore: "Download for iOS"
+  playstore: "Get it on Google Play"
+  fdroid: "Add the F-Droid repo"
+  contact: "Get in touch"
+  coming_soon: "Coming soon"
+
+footer:
+  privacy: "Privacy Policy"
+  terms: "Terms of Service"
+  impressum: "Impressum"
+  contact: "Contact"
+  rights: "Released under the MIT license."
+
+page:
+  last_updated: "Last updated:"
+
+not_found:
+  title: "Page not found"
+  heading: "This page does not exist."
+  subtitle: "The link may be old, or the address was mistyped."
+  back: "Back to the start page"

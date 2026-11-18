@@ -1,0 +1,24 @@
+# Landing page settings for the apppage engine (merged onto its config/engine.yml).
+# Translatable strings live in i18n/<lang>.yml.
+
+title: LUKS Remote Unlocker
+url: "https://luksremoteunlocker.manzari.dev"
+
+# First entry is the default language, served at "/".
+languages: [en]
+
+# Download channels. Add app_store_url / play_store_url once the listings exist.
+fdroid_url: "https://fdroid.manzari.dev/fdroid/repo?fingerprint=857764caf002a8a2dcccfb9f3da913e056602a0170d5b48512851806d1cc274f"
+# play_store_url: "https://play.google.com/store/apps/details?id=dev.manzari.luksremoteunlocker"
+# app_store_url: ""
+
+contact_email: "mail@manzari.dev"
+
+# Impressum
+company:
+  name: "Marco Manzari"
+  address1: "c/o COCENTER"
+  address2: "Koppoldstr. 1"
+  city: "Aichach"
+  zip: "86551"
+  phone: "+49 30 55570662"
