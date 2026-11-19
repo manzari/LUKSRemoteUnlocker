@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "dev.manzari.luksremoteunlocker",
+      "sha256_cert_fingerprints": [
+        "56:88:B1:4C:A7:48:A1:41:E7:90:F4:02:38:1E:90:96:BB:94:92:68:13:20:B2:86:78:1B:28:44:C6:DF:B7:3A"
+      ]
+    }
+  }
+]

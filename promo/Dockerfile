@@ -57,6 +57,8 @@ FROM nginx:alpine
 COPY --from=builder /site/_site /usr/share/nginx/html
 COPY --from=builder /site/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=builder /site/nginx-security-headers.conf /etc/nginx/snippets/security-headers.conf
+# Copied past Jekyll, which skips dot directories.
+COPY .well-known /usr/share/nginx/html/.well-known
 
 EXPOSE 80
 
