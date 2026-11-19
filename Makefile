@@ -144,16 +144,13 @@ bench-up:
 bench-down:
 	docker compose -f bench/compose.yaml down -v
 
-# Landing page: promo/ is the content, the apppage engine renders it; deploys use promo/compose.yaml.
-# APPPAGE is a checkout of the engine (git.hauptstadt.monster/manzari/apppage).
-APPPAGE ?= ../apppage
+# Landing page: promo/ is the content, promo/engine renders it; deploys use promo/compose.yaml.
 PROMO_IMAGE := luks-unlocker-promo
 PROMO_PORT ?= 8888
 
 # Local preview image; its privacy policy and terms are placeholders.
 promo:
-	docker build -q $(DOCKER_BUILD_OPTS) -t $(PROMO_IMAGE) --build-context engine=$(APPPAGE) \
-		--build-arg ALLOW_PLACEHOLDER_LEGAL=1 promo
+	docker build -q $(DOCKER_BUILD_OPTS) -t $(PROMO_IMAGE) --build-arg ALLOW_PLACEHOLDER_LEGAL=1 promo
 
 promo-up: promo
 	@echo "http://localhost:$(PROMO_PORT)"

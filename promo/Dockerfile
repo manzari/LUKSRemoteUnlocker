@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
-# Landing page: this directory is the content, the apppage engine renders it.
-# The engine comes in as the named build context `engine` (see compose.yaml).
-# The steps follow the engine's own Dockerfile; keep them in line with it.
+# Landing page: this directory is the content, engine/ renders it.
+# engine/ is a copy of the apppage engine at commit 7ef4a00: its bin, config,
+# src and build files.
 
 FROM ruby:3.2-alpine AS builder
 
@@ -9,16 +9,17 @@ RUN apk add --no-cache build-base ca-certificates curl git jq nodejs npm
 
 WORKDIR /site
 
-COPY --from=engine Gemfile Gemfile.lock ./
+COPY engine/Gemfile engine/Gemfile.lock ./
 RUN bundle install
 
-COPY --from=engine package.json package-lock.json ./
+COPY engine/package.json engine/package-lock.json ./
 RUN npm ci --ignore-scripts
 
-COPY --from=engine . .
+COPY engine/ .
 
-# Legal pages come from the engrossify API. This layer depends only on the two
-# files below, so edits to texts and images do not render them again.
+# Legal pages come from the engrossify API. This layer depends only on the
+# engine and the two files below, so edits to texts and images do not render
+# them again.
 COPY _config.yml engrossify.yaml /project/
 ARG ENGROSSIFY_URL=https://legal.guestlist.ink
 ARG LEGAL_RENDER_VERSION=1
@@ -38,7 +39,9 @@ RUN --mount=type=secret,id=engrossify_api_key \
         sh bin/render-legal.sh /project; \
     fi
 
-COPY . /project/
+COPY brand.css /project/
+COPY i18n /project/i18n
+COPY images /project/images
 RUN sh bin/apply-content.sh /project
 
 RUN mkdir -p src/assets/css/vendor/fontawesome src/assets/fonts/fontawesome src/assets/fonts/inter && \

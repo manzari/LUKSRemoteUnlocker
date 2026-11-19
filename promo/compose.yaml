@@ -4,29 +4,20 @@
 # Coolify lists a variable only when `environment` or `build.args` of a service
 # references it, so every variable this file reads is named under `args`.
 #   ENGROSSIFY_API_KEY  required, key for the legal render
-#   GIT_AUTH_TOKEN      required, Forgejo access token that can read manzari/apppage
 
 services:
   web:
     build:
       context: .
-      additional_contexts:
-        # The apppage engine, at the tip of its `engine` branch. Pin a commit
-        # with "...apppage.git#<sha>", or point at a local checkout.
-        engine: "${APPPAGE_ENGINE:-https://git.hauptstadt.monster/manzari/apppage.git#engine}"
       args:
         ENGROSSIFY_URL: "${ENGROSSIFY_URL:-https://legal.guestlist.ink}"
         # Bump to render the legal pages again when only the remote templates changed.
         LEGAL_RENDER_VERSION: "${LEGAL_RENDER_VERSION:-1}"
-        # Named only so Coolify lists them: the Dockerfile declares no ARG for
-        # these, and the two required ones reach the build as the secrets below.
-        APPPAGE_ENGINE: "${APPPAGE_ENGINE:-https://git.hauptstadt.monster/manzari/apppage.git#engine}"
+        # Named only so Coolify lists it: the Dockerfile declares no ARG for it
+        # and reads it as the secret below.
         ENGROSSIFY_API_KEY: "${ENGROSSIFY_API_KEY:?}"
-        GIT_AUTH_TOKEN: "${GIT_AUTH_TOKEN:?}"
       secrets:
         - engrossify_api_key
-        # BuildKit uses a secret with this id to fetch private git contexts.
-        - GIT_AUTH_TOKEN
     expose:
       - "80"
     environment:
@@ -42,5 +33,3 @@ services:
 secrets:
   engrossify_api_key:
     environment: ENGROSSIFY_API_KEY
-  GIT_AUTH_TOKEN:
-    environment: GIT_AUTH_TOKEN

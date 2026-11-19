@@ -73,12 +73,12 @@ Everything runs in Docker (`tool/Dockerfile.dart`, `tool/Dockerfile.flutter`, `t
 | `make test-bench` | Engine and CLI tests against the running bench |
 | `make test-app-bench` | Linux app under Xvfb unlocks the three bench targets in parallel (resets them first) |
 | `make test-android-bench` | Same flow on an Android emulator (`tool/Dockerfile.emulator`); needs a Docker daemon that sees `/dev/kvm`, `EMULATOR_ACCEL=off` runs without it, very slowly |
-| `make promo` / `promo-up` | Builds the landing page image, or builds and serves it on `localhost:8888`; needs the engine checked out at `../apppage` (`APPPAGE=...`) |
+| `make promo` / `promo-up` | Builds the landing page image, or builds and serves it on `localhost:8888` |
 | `make promo-shots` | Renders the app's screens in widget tests and writes them to `promo/images` |
 
 ## Landing page
 
-[luksremoteunlocker.manzari.dev](https://luksremoteunlocker.manzari.dev) is built from `promo/` by the [apppage](https://git.hauptstadt.monster/manzari/apppage) engine: texts in `promo/i18n/en.yml`, links and Impressum data in `promo/_config.yml`, colours in `promo/brand.css`, and the privacy policy and terms from `promo/engrossify.yaml`. `promo/compose.yaml` is the deployment and lists the two secrets its build needs.
+[luksremoteunlocker.manzari.dev](https://luksremoteunlocker.manzari.dev) is built from `promo/` by the apppage engine, a copy of which is in `promo/engine`: texts in `promo/i18n/en.yml`, links and Impressum data in `promo/_config.yml`, colours in `promo/brand.css`, and the privacy policy and terms from `promo/engrossify.yaml`. `promo/compose.yaml` is the deployment and names the one secret its build needs.
 
 Android blocks screenshots of the app, so the images on the page are the real screens rendered by `make promo-shots` with made-up hosts.
 
