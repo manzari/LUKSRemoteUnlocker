@@ -7,7 +7,7 @@ workflows:
       flutter: 3.50.0
       java: 21
       android_signing:
-        - release
+        - luksremoteunlocker_release_key
       groups:
         - google_play
     scripts:
