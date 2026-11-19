@@ -24,13 +24,10 @@ controller:
   phone: "+49 30 55570662"
 
 supervisory_authority:
-  # TODO: confirm. Copied from the other manzari.dev pages, which carry the same
-  # open question: the address is in Bayern, the key says Berlin.
   key: berlin
 
 site:
   url: https://luksremoteunlocker.manzari.dev
-  # TODO: confirm the host this page is deployed on.
   hosting_provider: Hetzner Online GmbH
   hosting_country: DE
   fonts_self_hosted: true
@@ -84,4 +81,3 @@ terms:
     keeping their own copies of keys and passphrases.
   governing_law: DE
   jurisdiction: Berlin
-  # No contract_type: the app is free, so price, delivery and warranty clauses are not rendered.
