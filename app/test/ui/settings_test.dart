@@ -238,6 +238,28 @@ void main() {
     expect(await app.db.select(app.db.secrets).get(), isEmpty);
   });
 
+  testWidgets('privacy policy and terms open the landing page', (tester) async {
+    final app = await pumpApp(tester);
+    await openTab(tester, 'Settings');
+    await tester.tap(find.text('Privacy policy'));
+    await tester.tap(find.text('Terms of service'));
+    await tester.pumpAndSettle();
+    expect(app.services.openedLinks.map((u) => '$u'), [
+      'https://luksremoteunlocker.manzari.dev/privacy/',
+      'https://luksremoteunlocker.manzari.dev/terms/',
+    ]);
+
+    app.services.linksOpen = false;
+    await tester.tap(find.text('Privacy policy'));
+    await tester.pumpAndSettle();
+    expect(
+      find.text(
+        'Could not open https://luksremoteunlocker.manzari.dev/privacy/',
+      ),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('setup help shows the server-side advice', (tester) async {
     await pumpApp(tester);
     await tester.tap(find.byTooltip('Server setup help'));

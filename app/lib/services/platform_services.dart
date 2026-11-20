@@ -2,7 +2,9 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:file_selector/file_selector.dart';
+import 'package:flutter/services.dart' show PlatformException;
 import 'package:share_plus/share_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'config_file.dart';
 
@@ -19,6 +21,9 @@ abstract interface class PlatformServices {
 
   /// Save dialog on desktop, share sheet on mobile; false when cancelled.
   Future<bool> saveConfigFile(String fileName, Uint8List bytes);
+
+  /// Opens [url] in the browser; false when nothing on the device can.
+  Future<bool> openLink(Uri url);
 }
 
 /// Larger files cannot be SSH private keys.
@@ -63,6 +68,15 @@ final class PluginPlatformServices implements PlatformServices {
     if (location == null) return false;
     await File(location.path).writeAsBytes(bytes, flush: true);
     return true;
+  }
+
+  @override
+  Future<bool> openLink(Uri url) async {
+    try {
+      return await launchUrl(url, mode: LaunchMode.externalApplication);
+    } on PlatformException {
+      return false;
+    }
   }
 
   static Future<PickedFile?> _pick(int maxBytes, String tooLarge) async {

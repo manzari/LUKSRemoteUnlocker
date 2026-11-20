@@ -24,6 +24,16 @@ String exportFileName(DateTime d) =>
 /// "1 host", "2 hosts".
 String countOf(int n, String noun) => '$n $noun${n == 1 ? '' : 's'}';
 
+/// Legal pages of the landing page (promo/).
+final privacyPolicyUrl = Uri.https(
+  'luksremoteunlocker.manzari.dev',
+  '/privacy/',
+);
+final termsOfServiceUrl = Uri.https(
+  'luksremoteunlocker.manzari.dev',
+  '/terms/',
+);
+
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
 
@@ -179,6 +189,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
     if (ok != true) return;
     await _controller.reset();
+  }
+
+  Future<void> _open(Uri url) async {
+    final opened = await ref.read(platformServicesProvider).openLink(url);
+    if (!opened && mounted) showMessage(context, 'Could not open $url');
   }
 
   @override
@@ -357,6 +372,18 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 applicationLegalese:
                     'Works offline. No cloud, no telemetry, no analytics.',
               ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.privacy_tip_outlined),
+              title: const Text('Privacy policy'),
+              subtitle: const Text('Opens in the browser'),
+              onTap: () => _open(privacyPolicyUrl),
+            ),
+            ListTile(
+              leading: const Icon(Icons.gavel_outlined),
+              title: const Text('Terms of service'),
+              subtitle: const Text('Opens in the browser'),
+              onTap: () => _open(termsOfServiceUrl),
             ),
           ],
         ),

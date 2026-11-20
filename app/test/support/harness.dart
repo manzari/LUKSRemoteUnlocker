@@ -233,6 +233,16 @@ final class FakePlatformServices implements PlatformServices {
     if (saveConfirmed) savedConfigs.add((name: fileName, bytes: bytes));
     return saveConfirmed;
   }
+
+  /// False acts like a device without a browser.
+  bool linksOpen = true;
+  final openedLinks = <Uri>[];
+
+  @override
+  Future<bool> openLink(Uri url) async {
+    if (linksOpen) openedLinks.add(url);
+    return linksOpen;
+  }
 }
 
 final class TestApp {

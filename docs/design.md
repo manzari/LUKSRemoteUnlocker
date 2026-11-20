@@ -139,6 +139,7 @@ Flutter (Dart), one codebase, built around a pure-Dart core that also ships as a
 | Android background | [flutter\_foreground\_task](https://pub.dev/packages/flutter_foreground_task) ^11 | Used only to keep the process, CPU and Wi-Fi awake. The engine keeps running in the main isolate, so secrets never cross an isolate boundary. Service type `dataSync`. |
 | iOS background | None; [wakelock\_plus](https://pub.dev/packages/wakelock_plus) keeps the screen on | iOS stops long background work. |
 | Public key sharing | `qr_flutter`, `share_plus` | Latest stable. |
+| Legal links | `url_launcher` | Settings opens the landing page's privacy policy and terms in the browser; the app itself still makes no web request. |
 
 **Repository layout** (Dart pub workspace)
 
