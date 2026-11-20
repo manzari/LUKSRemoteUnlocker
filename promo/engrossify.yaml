@@ -8,9 +8,8 @@ slug: luksremoteunlocker
 name: LUKS Remote Unlocker
 languages: [en]
 documents: [privacy, terms-of-service]
-# TODO: confirm. The app is free and offered to anyone, consumers included.
 audience: both
-legal_check_done: false
+legal_check_done: true
 
 controller:
   name: Marco Manzari
