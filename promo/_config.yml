@@ -11,7 +11,7 @@ languages: [en]
 fdroid_url: "https://fdroid.manzari.dev/fdroid/repo?fingerprint=857764caf002a8a2dcccfb9f3da913e056602a0170d5b48512851806d1cc274f"
 # play_store_url: "https://play.google.com/store/apps/details?id=dev.manzari.luksremoteunlocker"
 # app_store_url: ""
-
+source_url: "https://git.hauptstadt.monster/manzari/luksremoteunlocker"
 contact_email: "mail@manzari.dev"
 
 # Impressum
