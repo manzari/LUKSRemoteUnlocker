@@ -18,11 +18,11 @@ hero:
   screenshot_1:
     icon: "fas fa-server"
     label: "A run over three servers, each with its own live log"
-    image: "/assets/images/run-dark.webp"
+    image: "/assets/images/run-dark.jpg"
   screenshot_2:
     icon: "fas fa-server"
     label: "The list of servers, grouped"
-    image: "/assets/images/hosts-dark.webp"
+    image: "/assets/images/hosts-dark.jpg"
 
 features:
   tag: "Features"
@@ -55,19 +55,19 @@ screenshots:
   items:
     - icon: "fas fa-pen"
       label: "The form for a server: addresses, SSH key and passphrase"
-      image: "/assets/images/host-form-light.webp"
+      image: "/assets/images/host-form-light.jpg"
     - icon: "fas fa-key"
       label: "An SSH key with its public line and QR code"
-      image: "/assets/images/key-light.webp"
+      image: "/assets/images/key-light.jpg"
     - icon: "fas fa-server"
       label: "The list of servers, grouped"
-      image: "/assets/images/hosts-light.webp"
+      image: "/assets/images/hosts-light.jpg"
     - icon: "fas fa-shield-halved"
       label: "Confirming a new host key by its fingerprint"
-      image: "/assets/images/host-key-light.webp"
+      image: "/assets/images/host-key-light.jpg"
     - icon: "fas fa-list-check"
       label: "A run over three servers, each with its own live log"
-      image: "/assets/images/run-light.webp"
+      image: "/assets/images/run-light.jpg"
 
 cta:
   title: "Get the app"

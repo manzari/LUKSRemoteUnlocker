@@ -24,12 +24,12 @@ IN_FLUTTER_TTY = $(RUN) -it -v $(FLUTTER_HOME_VOLUME):/home/dev $(FLUTTER_IMAGE)
 
 .PHONY: help images image-dart image-flutter image-emulator test test-core test-cli test-app test-bench test-app-bench \
 	test-android-bench cli apk apk-release aab linux icons shell-dart shell-flutter run-dart run-flutter bench-up bench-down clean require-signing \
-	promo promo-up promo-shots
+	promo promo-up promo-shots promo-feature
 
 help:
 	@echo "Targets: test test-core test-cli test-app test-bench test-app-bench test-android-bench cli apk apk-release aab linux icons"
 	@echo "         shell-dart shell-flutter run-dart CMD=... run-flutter CMD=... bench-up bench-down images clean"
-	@echo "         promo promo-up promo-shots"
+	@echo "         promo promo-up promo-shots promo-feature"
 
 images: image-dart image-flutter
 
@@ -159,7 +159,12 @@ promo-up: promo
 # Android blocks screenshots of the app, so the widget tests render its screens into promo/images.
 promo-shots: image-flutter
 	$(IN_FLUTTER) bash -ec 'cd app; flutter test --dart-define=PROMO_SHOTS=1 test/promo/promo_screenshots_test.dart'
-	docker run --rm -e HOST_UID=$(HOST_UID) -e HOST_GID=$(HOST_GID) -v "$(CURDIR)":/work -w /work alpine:3.22 tool/promo_webp.sh
+	docker run --rm -e HOST_UID=$(HOST_UID) -e HOST_GID=$(HOST_GID) -v "$(CURDIR)":/work -w /work alpine:3.22 tool/promo_jpg.sh
+	@$(MAKE) --no-print-directory promo-feature
+
+# Play Store feature graphic; it embeds promo/images/run-dark.jpg, so promo-shots renders it again.
+promo-feature:
+	docker run --rm -e HOST_UID=$(HOST_UID) -e HOST_GID=$(HOST_GID) -v "$(CURDIR)":/work -w /work alpine:3.22 tool/promo_feature.sh
 
 clean:
 	rm -rf build app/build

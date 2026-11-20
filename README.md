@@ -75,6 +75,7 @@ Everything runs in Docker (`tool/Dockerfile.dart`, `tool/Dockerfile.flutter`, `t
 | `make test-android-bench` | Same flow on an Android emulator (`tool/Dockerfile.emulator`); needs a Docker daemon that sees `/dev/kvm`, `EMULATOR_ACCEL=off` runs without it, very slowly |
 | `make promo` / `promo-up` | Builds the landing page image, or builds and serves it on `localhost:8888` |
 | `make promo-shots` | Renders the app's screens in widget tests and writes them to `promo/images` |
+| `make promo-feature` | Renders `promo/feature-graphic.svg` into the Play Store feature graphic, `promo/images/feature-graphic.png` |
 
 ## Landing page
 

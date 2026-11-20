@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 500" role="img" aria-label="LUKS Remote Unlocker: unlock LUKS servers from your phone">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#22355c"/>
+      <stop offset="1" stop-color="#0e1730"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="800" cy="300" r="420" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7fd6c2" stop-opacity=".2"/>
+      <stop offset="1" stop-color="#7fd6c2" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="blur" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="22"/>
+    </filter>
+    <clipPath id="screen">
+      <rect x="-131" y="-294" width="262" height="588" rx="30"/>
+    </clipPath>
+  </defs>
+
+  <rect width="1024" height="500" fill="url(#bg)"/>
+  <rect width="1024" height="500" fill="url(#glow)"/>
+
+  <g fill="none" stroke="#7fd6c2" stroke-width="14" stroke-linecap="round">
+    <path d="M877.3 58.5A74 74 0 0 1 921.5 102.7"/>
+    <path d="M890.3 22.8A112 112 0 0 1 957.2 89.7" opacity=".55"/>
+  </g>
+
+  <g transform="translate(778 400) rotate(-7)">
+    <rect x="-150" y="-280" width="280" height="606" rx="38" fill="#050912" opacity=".6" filter="url(#blur)"/>
+    <rect x="-140" y="-303" width="280" height="606" rx="38" fill="#0a1124" stroke="#4a5f8f" stroke-width="2"/>
+    <image href="images/run-dark.jpg" x="-131" y="-294" width="262" height="588" preserveAspectRatio="xMidYMin slice" clip-path="url(#screen)"/>
+    <circle cy="-276" r="5" fill="#05070d"/>
+  </g>
+
+  <!-- The mark from docs/logo.svg. -->
+  <g transform="translate(72 118) scale(.1015625)">
+    <rect width="512" height="512" rx="112" fill="#0e1730" stroke="#4a5f8f" stroke-width="10"/>
+    <g transform="translate(-22 12)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M292.3 100.4A106 106 0 0 1 355.6 163.7" stroke="#7fd6c2" stroke-width="22"/>
+      <path d="M307.3 59A150 150 0 0 1 397 148.7" stroke="#7fd6c2" stroke-width="22" opacity=".55"/>
+      <path d="M194 262V200a62 62 0 0 1 124 0v22" stroke="#f5b83d" stroke-width="30"/>
+      <rect x="148" y="262" width="216" height="160" rx="32" fill="#f5b83d"/>
+      <path d="M214 312l32 30-32 30M266 372h38" stroke="#14203f" stroke-width="20"/>
+    </g>
+  </g>
+
+  <text x="140" y="153" font-family="Inter" font-weight="600" font-size="25" fill="#ffffff">LUKS Remote Unlocker</text>
+
+  <g font-family="Inter Display" font-weight="800" font-size="52" letter-spacing="-1">
+    <text x="72" y="250" fill="#ffffff">Unlock LUKS servers</text>
+    <text x="72" y="310" fill="#f5b83d">from your phone.</text>
+  </g>
+
+  <text x="72" y="362" font-family="Inter" font-weight="500" font-size="21" fill="#c3cee6">Pinned host keys <tspan fill="#7fd6c2">·</tspan> Boot confirmed <tspan fill="#7fd6c2">·</tspan> No cloud</text>
+</svg>
