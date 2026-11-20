@@ -1,6 +1,6 @@
 workflows:
   android-release:
-    name: Android release
+    name: Android build and upload to internal test
     instance_type: mac_mini_m2
     max_build_duration: 60
     environment:
@@ -27,7 +27,59 @@ workflows:
       google_play:
         credentials: $GCLOUD_SERVICE_ACCOUNT_CREDENTIALS
         track: internal
+        # Play accepts only drafts until the first release is rolled out in the Console.
+        # Then set this to false and RELEASE_STATUS below to completed.
         submit_as_draft: true
+
+  android-promote-closed:
+    name: Android promote internal test to closed test
+    instance_type: mac_mini_m2
+    max_build_duration: 10
+    environment: &promote_environment
+      groups:
+        - google_play
+      vars:
+        PACKAGE_NAME: dev.manzari.luksremoteunlocker
+        RELEASE_STATUS: draft
+    scripts:
+      - name: Promote the latest internal release
+        script: |
+          google-play tracks promote-release \
+            --credentials @env:GCLOUD_SERVICE_ACCOUNT_CREDENTIALS \
+            --package-name "$PACKAGE_NAME" \
+            --source-track internal \
+            --target-track alpha \
+            --release-status "$RELEASE_STATUS"
+
+  android-promote-open:
+    name: Android promote closed test to open test
+    instance_type: mac_mini_m2
+    max_build_duration: 10
+    environment: *promote_environment
+    scripts:
+      - name: Promote the latest closed test release
+        script: |
+          google-play tracks promote-release \
+            --credentials @env:GCLOUD_SERVICE_ACCOUNT_CREDENTIALS \
+            --package-name "$PACKAGE_NAME" \
+            --source-track alpha \
+            --target-track beta \
+            --release-status "$RELEASE_STATUS"
+
+  android-promote-production:
+    name: Android promote open test to production
+    instance_type: mac_mini_m2
+    max_build_duration: 10
+    environment: *promote_environment
+    scripts:
+      - name: Promote the latest open test release
+        script: |
+          google-play tracks promote-release \
+            --credentials @env:GCLOUD_SERVICE_ACCOUNT_CREDENTIALS \
+            --package-name "$PACKAGE_NAME" \
+            --source-track beta \
+            --target-track production \
+            --release-status "$RELEASE_STATUS"
 
   ios-release:
     name: iOS release
