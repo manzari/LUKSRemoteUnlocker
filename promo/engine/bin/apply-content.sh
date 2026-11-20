@@ -13,6 +13,7 @@
 #   i18n/<lang>.yml   all translatable strings
 #   images/           screenshots + favicon
 #   brand.css         optional per-project style overrides
+#   assetlinks.json   optional Android Digital Asset Links statement list
 
 set -eu
 
@@ -77,6 +78,25 @@ if [ -f "$CONTENT/brand.css" ]; then
   cp "$CONTENT/brand.css" src/assets/css/brand.css
 else
   : > src/assets/css/brand.css
+fi
+
+# Optional Digital Asset Links, served at /.well-known/assetlinks.json.
+# Copied verbatim: the verifier is strict about key names and formatting.
+rm -f src/.well-known/assetlinks.json
+rmdir src/.well-known 2>/dev/null || true
+if [ -f "$CONTENT/assetlinks.json" ]; then
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "apply-content: jq is required to validate $CONTENT/assetlinks.json" >&2
+    exit 1
+  fi
+  if ! problems=$(jq -rs -f "$SRC_DIR/bin/check-assetlinks.jq" "$CONTENT/assetlinks.json" 2>&1) \
+     || [ -n "$problems" ]; then
+    echo "apply-content: invalid $CONTENT/assetlinks.json:" >&2
+    printf '%s\n' "$problems" | sed 's/^/  /' >&2
+    exit 1
+  fi
+  mkdir -p src/.well-known
+  cp "$CONTENT/assetlinks.json" src/.well-known/assetlinks.json
 fi
 
 # ---------------------------------------------------------------------------

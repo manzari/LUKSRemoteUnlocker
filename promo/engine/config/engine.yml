@@ -11,6 +11,10 @@ markdown: kramdown
 plugins:
   - jekyll-seo-tag
 
+# Jekyll skips dot-directories unless listed here.
+include:
+  - .well-known
+
 collections:
   pages:
     output: true

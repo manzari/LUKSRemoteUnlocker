@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # Landing page: this directory is the content, engine/ renders it.
-# engine/ is a copy of the apppage engine at commit 7ef4a00: its bin, config,
+# engine/ is a copy of the apppage engine at commit 05ef896: its bin, config,
 # src and build files.
 
 FROM ruby:3.2-alpine AS builder
@@ -39,7 +39,7 @@ RUN --mount=type=secret,id=engrossify_api_key \
         sh bin/render-legal.sh /project; \
     fi
 
-COPY brand.css /project/
+COPY brand.css assetlinks.json /project/
 COPY i18n /project/i18n
 COPY images /project/images
 RUN sh bin/apply-content.sh /project
@@ -57,8 +57,6 @@ FROM nginx:alpine
 COPY --from=builder /site/_site /usr/share/nginx/html
 COPY --from=builder /site/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=builder /site/nginx-security-headers.conf /etc/nginx/snippets/security-headers.conf
-# Copied past Jekyll, which skips dot directories.
-COPY .well-known /usr/share/nginx/html/.well-known
 
 EXPOSE 80
 
