@@ -5,7 +5,7 @@ permalink: /impressum/
 lang_alt_root: true
 ---
 
-Angaben gemäß § 5 TMG.
+Angaben gemäß § 5 DDG.
 
 ## Anbieter
 
@@ -34,8 +34,7 @@ Telefon: {{ site.company.phone }}{% endif %}
 
 Die Inhalte dieser Seite wurden mit größter Sorgfalt erstellt. Für die
 Richtigkeit, Vollständigkeit und Aktualität der Inhalte kann jedoch keine
-Gewähr übernommen werden. Als Diensteanbieter sind wir gemäß § 7 Abs. 1 TMG
+Gewähr übernommen werden. Als Diensteanbieter sind wir gemäß § 7 Abs. 1 DDG
 für eigene Inhalte auf diesen Seiten nach den allgemeinen Gesetzen
-verantwortlich. Nach §§ 8 bis 10 TMG sind wir als Diensteanbieter jedoch
-nicht verpflichtet, übermittelte oder gespeicherte fremde Informationen zu
-überwachen.
+verantwortlich. Zu einer allgemeinen Überwachung übermittelter oder
+gespeicherter fremder Informationen sind wir nicht verpflichtet.
